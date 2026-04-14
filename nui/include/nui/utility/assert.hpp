@@ -28,6 +28,6 @@ namespace Nui
 #ifdef NDEBUG
 #    define NUI_ASSERT(condition, message)
 #else
-#    define NUI_ASSERT(condition, message) assertImpl(condition, message)
+#    define NUI_ASSERT(condition, message) Nui::assertImpl(condition, message)
 #endif
 }
