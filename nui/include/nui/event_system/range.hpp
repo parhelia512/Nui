@@ -244,6 +244,22 @@ namespace Nui
         };
     }
 
+    /**
+     * @brief Owning range overload for rvalue containers. Takes ownership so the
+     *        iterated elements remain alive for the full lifetime of the render,
+     *        even if the caller's local container goes out of scope immediately.
+     */
+    template <typename ContainerT>
+    requires(!IsObserved<std::remove_cvref_t<ContainerT>>)
+    UnoptimizedRange<OwningIteratorAccessor<std::remove_cvref_t<ContainerT>>>
+    range(ContainerT&& container)
+    {
+        using Owned = std::remove_cvref_t<ContainerT>;
+        return UnoptimizedRange<OwningIteratorAccessor<Owned>>{
+            OwningIteratorAccessor<Owned>{std::forward<ContainerT>(container)},
+        };
+    }
+
 #ifdef NUI_HAS_STD_RANGES
     template <typename T, typename... Observed>
     UnoptimizedRange<

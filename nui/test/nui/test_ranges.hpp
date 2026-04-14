@@ -2486,4 +2486,88 @@ namespace Nui::Tests
             EXPECT_TRUE(found);
         }
     }
+
+    TEST_F(TestRanges, OwningRangeKeepsRvalueContainerAlive)
+    {
+        Nui::val parent;
+
+        using Nui::Elements::div;
+        using Nui::Elements::body;
+        using namespace Nui::Attributes;
+
+        // Build a local vector and std::move it into range() — the resulting
+        // UnoptimizedRange must own the vector so iteration stays safe after
+        // the caller's scope exits.
+        auto makeVec = []() {
+            std::vector<int> local{10, 20, 30};
+            return local;
+        };
+
+        // clang-format off
+        render(
+            body{reference = parent}(
+                range(makeVec()),
+                [](long long, auto const& element) {
+                    return div{}(std::to_string(element));
+                }
+            )
+        );
+        // clang-format on
+
+        ASSERT_EQ(parent["children"]["length"].as<long long>(), 3);
+        EXPECT_EQ(parent["children"][0]["textContent"].as<std::string>(), "10");
+        EXPECT_EQ(parent["children"][1]["textContent"].as<std::string>(), "20");
+        EXPECT_EQ(parent["children"][2]["textContent"].as<std::string>(), "30");
+    }
+
+    TEST_F(TestRanges, OwningRangeWorksWithMovedLocal)
+    {
+        Nui::val parent;
+
+        using Nui::Elements::div;
+        using Nui::Elements::body;
+        using namespace Nui::Attributes;
+
+        std::vector<std::string> children;
+        children.emplace_back("alpha");
+        children.emplace_back("beta");
+        children.emplace_back("gamma");
+
+        // clang-format off
+        render(
+            body{reference = parent}(
+                range(std::move(children)),
+                [](long long, auto const& element) {
+                    return div{}(element);
+                }
+            )
+        );
+        // clang-format on
+
+        ASSERT_EQ(parent["children"]["length"].as<long long>(), 3);
+        EXPECT_EQ(parent["children"][0]["textContent"].as<std::string>(), "alpha");
+        EXPECT_EQ(parent["children"][1]["textContent"].as<std::string>(), "beta");
+        EXPECT_EQ(parent["children"][2]["textContent"].as<std::string>(), "gamma");
+    }
+
+    TEST_F(TestRanges, LvalueRangeStillWorks)
+    {
+        // Regression guard: the rvalue overload must not shadow the
+        // long-standing lvalue overload when callers pass a named container.
+        Nui::val parent;
+
+        using Nui::Elements::div;
+        using Nui::Elements::body;
+        using namespace Nui::Attributes;
+
+        std::vector<int> vec{7, 8, 9};
+
+        render(body{reference = parent}(range(vec), [](long long, auto const& element) {
+            return div{}(std::to_string(element));
+        }));
+
+        ASSERT_EQ(parent["children"]["length"].as<long long>(), 3);
+        EXPECT_EQ(parent["children"][0]["textContent"].as<std::string>(), "7");
+        EXPECT_EQ(parent["children"][2]["textContent"].as<std::string>(), "9");
+    }
 }
