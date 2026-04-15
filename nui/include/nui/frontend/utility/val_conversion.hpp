@@ -86,7 +86,7 @@ namespace Nui
      */
     template <typename T>
     requires Fundamental<T>
-    Nui::val convertToVal(T const& value);
+    Nui::val convertToVal(T value);
 
     /**
      * @brief Converts string to Nui::val.
@@ -422,9 +422,38 @@ namespace Nui
     }
     template <typename T>
     requires Fundamental<T>
-    Nui::val convertToVal(T const& value)
+    Nui::val convertToVal(T value)
     {
         return Nui::val{value};
+    }
+
+    /**
+     * @brief 64-bit integers are transported as `{_u64_hi, _u64_lo}` objects
+     *        instead of JS BigInts so the RPC layer's JSON.stringify call
+     *        doesn't throw "cannot serialize BigInt".  The high/low halves
+     *        are stored as `double` on the wire because emscripten::val::set
+     *        with a 32-bit unsigned argument can still route through a
+     *        BigInt path on some Emscripten configurations — doubles are
+     *        unambiguously JS Number.  Values fit in the 53-bit mantissa of
+     *        a double (both halves are at most 32 bits), so no precision is
+     *        lost.  Both sides are unsigned on the wire to keep the sign
+     *        bit of the int64_t overload out of transport.
+     *
+     *        Plain non-template overloads so they unambiguously beat the
+     *        Fundamental template under any overload resolution rules.
+     */
+    inline Nui::val convertToVal(std::uint64_t value)
+    {
+        constexpr unsigned u32BitCount = 32;
+        constexpr std::uint64_t u32Mask = 0xFFFFFFFFu;
+        Nui::val result = Nui::val::object();
+        result.set("_u64_hi", static_cast<double>((value >> u32BitCount) & u32Mask));
+        result.set("_u64_lo", static_cast<double>(value & u32Mask));
+        return result;
+    }
+    inline Nui::val convertToVal(std::int64_t value)
+    {
+        return convertToVal(static_cast<std::uint64_t>(value));
     }
     inline Nui::val convertToVal(std::string const& value)
     {
@@ -514,15 +543,6 @@ namespace Nui
         Nui::val val;
         to_val(val, value);
         return val;
-    }
-
-    inline Nui::val convertToVal(long long value)
-    {
-        return Nui::val{value};
-    }
-    inline Nui::val convertToVal(unsigned long long value)
-    {
-        return Nui::val{value};
     }
 
     template <typename T, class Members = boost::describe::describe_members<T, boost::describe::mod_any_access>>
@@ -668,12 +688,32 @@ namespace Nui
         from_val(val, value);
     }
 
-    inline void convertFromVal(Nui::val const& val, long long& value)
+    /**
+     * @brief Mirror of the `convertToVal(std::uint64_t)` split-encoding.
+     *        Accepts either the split object `{_u64_hi, _u64_lo}` (the shape
+     *        produced by our convertToVal and by describe-struct to_json) or
+     *        a plain JS number for legacy payloads.
+     */
+    inline void convertFromVal(Nui::val const& val, std::uint64_t& value)
     {
-        value = val.as<long long>();
+        constexpr unsigned u32BitCount = 32;
+        if (val.hasOwnProperty("_u64_hi") && val.hasOwnProperty("_u64_lo"))
+        {
+            // Accept either a JS Number (our convertToVal-on-wire form) or a
+            // plain uint32 (legacy).  `as<double>()` fits both because every
+            // 32-bit value round-trips through a double without precision
+            // loss (fits in the 53-bit mantissa).
+            const auto hi = static_cast<std::uint64_t>(val["_u64_hi"].as<double>());
+            const auto lo = static_cast<std::uint64_t>(val["_u64_lo"].as<double>());
+            value = (hi << u32BitCount) | lo;
+            return;
+        }
+        value = static_cast<std::uint64_t>(val.as<double>());
     }
-    inline void convertFromVal(Nui::val const& val, unsigned long long& value)
+    inline void convertFromVal(Nui::val const& val, std::int64_t& value)
     {
-        value = val.as<unsigned long long>();
+        std::uint64_t reinterpreted = 0;
+        convertFromVal(val, reinterpreted);
+        value = static_cast<std::int64_t>(reinterpreted);
     }
 }

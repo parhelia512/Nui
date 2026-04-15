@@ -25,13 +25,45 @@ namespace Nui
         struct FunctionWrapperImpl
         {};
 
+        /**
+         * @brief Unpack a single RPC parameter from its nlohmann JSON form.
+         *
+         *        The frontend wraps 64-bit integers into `{_u64_hi, _u64_lo}`
+         *        objects (see convertToVal in val_conversion.hpp) because JS
+         *        JSON.stringify can't serialize BigInt. Any handler whose
+         *        signature takes a bare `uint64_t`/`int64_t` parameter would
+         *        otherwise fail the default `json.get<uint64_t>()` type check
+         *        — this overload rebuilds the scalar from the split shape,
+         *        and still accepts legacy plain-number payloads for
+         *        backward compatibility.
+         */
         template <typename ArgT>
         constexpr static auto extractJsonMember(nlohmann::json const& json) -> decltype(auto)
         {
-            if constexpr (std::is_same_v<std::decay_t<ArgT>, nlohmann::json>)
+            using Decayed = std::decay_t<ArgT>;
+            if constexpr (std::is_same_v<Decayed, nlohmann::json>)
+            {
                 return json;
+            }
+            else if constexpr (std::is_same_v<Decayed, std::uint64_t> || std::is_same_v<Decayed, std::int64_t>)
+            {
+                constexpr unsigned u32BitCount = 32;
+                if (json.is_object() && json.contains("_u64_hi") && json.contains("_u64_lo"))
+                {
+                    const auto hi = static_cast<std::uint64_t>(json.at("_u64_hi").get<std::uint32_t>());
+                    const auto lo = static_cast<std::uint64_t>(json.at("_u64_lo").get<std::uint32_t>());
+                    const std::uint64_t combined = (hi << u32BitCount) | lo;
+                    if constexpr (std::is_same_v<Decayed, std::int64_t>)
+                        return static_cast<std::int64_t>(combined);
+                    else
+                        return combined;
+                }
+                return json.get<Decayed>();
+            }
             else
-                return json.get<std::decay_t<ArgT>>();
+            {
+                return json.get<Decayed>();
+            }
         }
 
         template <typename ReturnType>
@@ -155,6 +187,41 @@ namespace Nui
             return *window_;
         }
 
+      private:
+        /**
+         * @brief Normalize a single outgoing RPC argument so 64-bit integers
+         *        ship in the `{_u64_hi, _u64_lo}` split form — identical to
+         *        what struct members and frontend-originated payloads use.
+         *
+         *        Bare `uint64_t`/`int64_t` args otherwise fall into nlohmann's
+         *        default serializer which emits a plain JSON number; that's
+         *        lossy for values above JS's 53-bit safe integer range and
+         *        asymmetric with the split form the frontend sends back.
+         *        Non-integer args are passed through untouched so struct
+         *        describe-based serialization (which already handles u64
+         *        members via shared_data's to_json_impl) still kicks in.
+         */
+        template <typename Arg>
+        static auto normalizeCallRemoteArg(Arg&& arg)
+        {
+            using Decayed = std::decay_t<Arg>;
+            if constexpr (std::is_same_v<Decayed, std::uint64_t> || std::is_same_v<Decayed, std::int64_t>)
+            {
+                constexpr unsigned u32BitCount = 32;
+                constexpr std::uint64_t u32Mask = 0xFFFFFFFFu;
+                const auto uv = static_cast<std::uint64_t>(arg);
+                return nlohmann::json{
+                    {"_u64_hi", static_cast<std::uint32_t>((uv >> u32BitCount) & u32Mask)},
+                    {"_u64_lo", static_cast<std::uint32_t>(uv & u32Mask)},
+                };
+            }
+            else
+            {
+                return std::forward<Arg>(arg);
+            }
+        }
+
+      public:
         /**
          * @brief For technical reasons these cannot return a value currently.
          *
@@ -165,12 +232,12 @@ namespace Nui
         template <typename... Args>
         void callRemote(std::string const& name, Args&&... args) const
         {
-            callRemoteImpl(name, nlohmann::json{std::forward<Args>(args)...});
+            callRemoteImpl(name, nlohmann::json{normalizeCallRemoteArg(std::forward<Args>(args))...});
         }
         template <typename Arg>
         void callRemote(std::string const& name, Arg&& arg) const
         {
-            nlohmann::json json = std::forward<Arg>(arg);
+            nlohmann::json json = normalizeCallRemoteArg(std::forward<Arg>(arg));
             callRemoteImpl(name, json);
         }
         void callRemote(std::string const& name, nlohmann::json const& json) const

@@ -143,4 +143,40 @@ namespace Nui
     // Deduction guide for non-const ContainerT
     template <typename ContainerT>
     IteratorAccessor(ContainerT&) -> IteratorAccessor<ContainerT>;
+
+    /**
+     * @brief Owning iterator accessor for temporary containers.
+     *        Stores the container by value so callers can pass an rvalue
+     *        (e.g. a locally-built std::vector<ElementRenderer>) into
+     *        Nui::range(...) without worrying about dangling references.
+     */
+    template <typename ContainerT>
+    class OwningIteratorAccessor
+    {
+      public:
+        using IteratorType = typename ContainerT::iterator;
+        using ConstIteratorType = typename ContainerT::const_iterator;
+
+        explicit OwningIteratorAccessor(ContainerT&& container)
+            : container_{std::move(container)}
+        {}
+        ~OwningIteratorAccessor() = default;
+        OwningIteratorAccessor(OwningIteratorAccessor const&) = default;
+        OwningIteratorAccessor(OwningIteratorAccessor&&) = default;
+        OwningIteratorAccessor& operator=(OwningIteratorAccessor const&) = default;
+        OwningIteratorAccessor& operator=(OwningIteratorAccessor&&) = default;
+
+        ConstIteratorType begin() const
+        {
+            return container_.begin();
+        }
+
+        ConstIteratorType end() const
+        {
+            return container_.end();
+        }
+
+      private:
+        ContainerT container_;
+    };
 }
