@@ -46,7 +46,7 @@ namespace Nui
         return id_ != -1;
     }
     // #####################################################################################################################
-    void setInterval(int milliseconds, std::function<void()> toWrap, std::function<void(TimerHandle&&)> callback)
+    void setInterval(std::int32_t milliseconds, std::function<void()> toWrap, std::function<void(TimerHandle&&)> callback)
     {
         RpcClient::getRemoteCallableWithBackChannel(
             "Nui::setInterval", [callback = std::move(callback), toWrap = std::move(toWrap)](int32_t timerId) {
@@ -57,7 +57,7 @@ namespace Nui
             })(milliseconds);
     }
     //---------------------------------------------------------------------------------------------------------------------
-    void setTimeout(int milliseconds, std::function<void()> toWrap, std::function<void(TimerHandle)> callback)
+    void setTimeout(std::int32_t milliseconds, std::function<void()> toWrap, std::function<void(TimerHandle)> callback)
     {
         RpcClient::getRemoteCallableWithBackChannel(
             "Nui::setTimeout", [callback = std::move(callback), toWrap = std::move(toWrap)](int32_t timerId) {

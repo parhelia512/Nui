@@ -32,20 +32,20 @@ namespace Nui
       public:
         ~AsyncFile();
 
-        void tellg(std::function<void(int32_t)> cb) const;
-        void tellp(std::function<void(int32_t)> cb) const;
-        void seekg(int32_t pos, std::function<void()> cb, std::ios_base::seekdir dir = std::ios_base::beg);
-        void seekp(int32_t pos, std::function<void()> cb, std::ios_base::seekdir dir = std::ios_base::beg);
+        void tellg(std::function<void(std::int64_t)> cb) const;
+        void tellp(std::function<void(std::int64_t)> cb) const;
+        void seekg(std::int64_t pos, std::function<void()> cb, std::ios_base::seekdir dir = std::ios_base::beg);
+        void seekp(std::int64_t pos, std::function<void()> cb, std::ios_base::seekdir dir = std::ios_base::beg);
 
-        void read(int32_t size, std::function<void(std::string&&)> cb);
+        void read(std::int32_t size, std::function<void(std::string&&)> cb);
         void readAll(std::function<void(std::string&&)> cb);
         void write(std::string const& data, std::function<void()> cb);
 
       private:
-        AsyncFile(int32_t id);
+        AsyncFile(std::int32_t id);
 
       private:
-        int32_t fileId_;
+        std::int32_t fileId_;
     };
     void openFile(
         char const* filename,

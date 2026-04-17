@@ -61,13 +61,13 @@ namespace Nui
         registerFunction("Nui::terminate", [this]() {
             window_->terminate();
         });
-        registerFunction("Nui::setWindowSize", [this](int width, int height, int hint) {
+        registerFunction("Nui::setWindowSize", [this](std::int32_t width, std::int32_t height, std::int32_t hint) {
             window_->setSize(width, height, static_cast<WebViewHint>(hint));
         });
         registerFunction("Nui::setWindowTitle", [this](std::string const& title) {
             window_->setTitle(title);
         });
-        registerFunction("Nui::setPosition", [this](int x, int y, bool useFrameOrigin) {
+        registerFunction("Nui::setPosition", [this](std::int32_t x, std::int32_t y, bool useFrameOrigin) {
             window_->setPosition(x, y, useFrameOrigin);
         });
         registerFunction("Nui::centerOnPrimaryDisplay", [this]() {

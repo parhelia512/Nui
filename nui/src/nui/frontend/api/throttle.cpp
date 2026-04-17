@@ -55,7 +55,7 @@ namespace Nui
     }
     // #####################################################################################################################
     void throttle(
-        int milliseconds,
+        std::int32_t milliseconds,
         std::function<void()> toWrap,
         std::function<void(ThrottledFunction&&)> callback,
         bool callWhenReady)

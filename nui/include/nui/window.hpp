@@ -8,6 +8,7 @@
 #    include <filesystem>
 #endif
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -16,7 +17,7 @@
 
 namespace Nui
 {
-    enum class WebViewHint : int
+    enum class WebViewHint : std::int32_t
     {
         WEBVIEW_HINT_NONE,
         WEBVIEW_HINT_MIN,
@@ -198,7 +199,7 @@ namespace Nui
          * @param height
          * @param hint
          */
-        void setSize(int width, int height, WebViewHint hint = WebViewHint::WEBVIEW_HINT_NONE);
+        void setSize(std::int32_t width, std::int32_t height, WebViewHint hint = WebViewHint::WEBVIEW_HINT_NONE);
 
         /**
          * @brief Sets the position of the window
@@ -207,7 +208,7 @@ namespace Nui
          * @param y yCoordinate
          * @param (MacOS only) use setFrameOrigin instead of setFrameTopLeftPoint (see apple doc)
          */
-        void setPosition(int x, int y, bool useFrameOrigin = true);
+        void setPosition(std::int32_t x, std::int32_t y, bool useFrameOrigin = true);
 
         /**
          * @brief Center the window on the primary display. Requires size to be set first.

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <functional>
 
 #include <nui/frontend/rpc_client.hpp>
@@ -40,7 +41,7 @@ namespace Nui
      * @param callWhenReady call the function when ready if it was not during the wait interval.
      */
     void throttle(
-        int milliseconds,
+        std::int32_t milliseconds,
         std::function<void()> toWrap,
         std::function<void(ThrottledFunction&&)> callback,
         bool callWhenReady = false);

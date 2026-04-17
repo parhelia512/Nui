@@ -122,7 +122,10 @@ namespace Nui
             auto& timer = store[id];
             timer->setId(id);
             timer->start();
-            hub.callRemote(responseId, id);
+            // See throttle.cpp: size_t registry id would go through
+            // normalizeCallRemoteArg as a split-u64 object, but the frontend
+            // handler is typed `(int32_t timerId)` and can't decode that.
+            hub.callRemote(responseId, static_cast<int32_t>(id));
         });
         hub.registerFunction("Nui::setTimeout", [&hub](std::string const& responseId, int32_t period) {
             auto& store = Detail::getStore(hub);
@@ -132,7 +135,7 @@ namespace Nui
             auto& timer = store[id];
             timer->setId(id);
             timer->start();
-            hub.callRemote(responseId, id);
+            hub.callRemote(responseId, static_cast<int32_t>(id));
         });
         hub.registerFunction("Nui::removeTimer", [&hub](int32_t id) {
             Detail::eraseTimerInstance(&hub, id);

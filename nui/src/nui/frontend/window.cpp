@@ -40,9 +40,9 @@ namespace Nui
         RpcClient::getRemoteCallable("Nui::setWindowTitle")(title);
     }
     //---------------------------------------------------------------------------------------------------------------------
-    void Window::setSize(int width, int height, WebViewHint hint)
+    void Window::setSize(std::int32_t width, std::int32_t height, WebViewHint hint)
     {
-        RpcClient::getRemoteCallable("Nui::setWindowSize")(width, height, static_cast<int>(hint));
+        RpcClient::getRemoteCallable("Nui::setWindowSize")(width, height, static_cast<std::int32_t>(hint));
     }
     //---------------------------------------------------------------------------------------------------------------------
     void Window::navigate(const std::string& location)
@@ -60,7 +60,7 @@ namespace Nui
         RpcClient::getRemoteCallable("Nui::openDevTools")();
     }
     //---------------------------------------------------------------------------------------------------------------------
-    void Window::setPosition(int x, int y, bool useFrameOrigin)
+    void Window::setPosition(std::int32_t x, std::int32_t y, bool useFrameOrigin)
     {
         RpcClient::getRemoteCallable("Nui::setPosition")(x, y, useFrameOrigin);
     }

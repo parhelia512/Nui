@@ -134,7 +134,12 @@ namespace Nui
                     std::make_shared<Detail::ThrottleInstance>(
                         std::chrono::milliseconds(period), callWhenReady, &hub, hub.window().getExecutor()));
                 store[id]->setId(id);
-                hub.callRemote(responseId, id);
+                // Cast: registry IdType is size_t (= uint64_t on 64-bit), which
+                // normalizeCallRemoteArg would ship as a {_u64_hi,_u64_lo}
+                // object — but the frontend temp handler is declared
+                // `(int32_t throttleId)` and can't decode that shape, so the
+                // callback would silently never fire.
+                hub.callRemote(responseId, static_cast<int32_t>(id));
             });
         hub.registerFunction("Nui::removeThrottle", [&hub](int32_t id) {
             auto& store = Detail::getStore(hub);
