@@ -8,6 +8,7 @@
 #    include <filesystem>
 #endif
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -16,7 +17,7 @@
 
 namespace Nui
 {
-    enum class WebViewHint : int
+    enum class WebViewHint : std::int32_t
     {
         WEBVIEW_HINT_NONE,
         WEBVIEW_HINT_MIN,
@@ -58,6 +59,20 @@ namespace Nui
     {
         std::string scheme{};
         std::variant<std::function<std::string const&()>, std::function<std::string()>> getContent;
+        /// Pull-based streaming reader for the request body. Only populated when CustomScheme::streamingContent
+        /// is true; empty (falsy std::function) otherwise. When populated, `getContent` is left empty and must
+        /// not be invoked — read the body via this reader instead.
+        ///
+        /// Fills `buffer` with up to `bufferSize` bytes and returns the number of bytes written. A return value
+        /// of 0 signals EOF. Partial reads (less than `bufferSize` without EOF) are permitted; call repeatedly
+        /// until 0 is returned.
+        ///
+        /// LIFETIME — IMPORTANT: this reader (and `getContent`) is only guaranteed to be safe to invoke
+        /// during the synchronous body of `CustomScheme::onRequest`. The backend retains the underlying
+        /// request handle for the duration of these closures, but invoking them after onRequest has returned
+        /// (e.g. from an asynchronous `bodyReader`) is undefined behavior. Read all body bytes you need
+        /// before returning a CustomSchemeResponse.
+        std::function<std::size_t(char* buffer, std::size_t bufferSize)> readContent;
         std::unordered_multimap<std::string, std::string> headers{};
         std::string uri{};
         std::string method{};
@@ -68,13 +83,46 @@ namespace Nui
         NuiCoreWebView2WebResourceContext resourceContext = NuiCoreWebView2WebResourceContext::All;
     };
 
+    /// Response returned from a CustomScheme::onRequest handler.
+    ///
+    /// The body may be supplied in one of three mutually exclusive forms. When more than one is populated,
+    /// the backend uses the first one in this priority order:
+    ///
+    ///   1. `bodyFile`   — file path; streamed directly by the OS (best for files, no buffering).
+    ///   2. `bodyReader` — pull-based callback; streamed chunk-by-chunk (best for generated / piped data).
+    ///   3. `body`       — in-memory string (simplest, but the full payload must fit in memory).
+    ///
+    /// Pick exactly one. Setting multiple is not an error, but the lower-priority ones are silently ignored.
     struct CustomSchemeResponse
     {
         int statusCode;
         /// WINDOWS ONLY
         std::string reasonPhrase{};
         std::unordered_multimap<std::string, std::string> headers{};
+
+        /// In-memory response body. Simple and zero-ceremony for small payloads, but the entire body must
+        /// be buffered in memory before the response is emitted — on Windows it is additionally copied into
+        /// a COM memory stream, so peak memory use is roughly 2× the body size. For payloads larger than a
+        /// few MB prefer `bodyFile` or `bodyReader`. Ignored when `bodyFile` or `bodyReader` is set.
         std::string body{};
+
+        /// Path to a file whose contents are streamed as the response body. Most efficient way to serve
+        /// files — uses `SHCreateStreamOnFileEx` on Windows, `g_file_read` (GFileInputStream) on Linux, and
+        /// a chunked `std::ifstream` dispatch on macOS. No intermediate copy of the file contents is made.
+        /// If the `Content-Length` header is absent, the backend populates it from the file size.
+        std::optional<std::filesystem::path> bodyFile{};
+
+        /// Pull-based streaming reader for the response body. Use for non-file sources (generated output,
+        /// sockets, decompressed streams, etc.). Fills `buffer` with up to `bufferSize` bytes. Returns the
+        /// number of bytes written; a return value of 0 signals EOF. Partial reads (less than `bufferSize`
+        /// without EOF) are permitted — the backend loops until 0 is returned. If the total size is known,
+        /// set `Content-Length` in `headers`; otherwise the response will be delivered without it.
+        ///
+        /// THREADING: the backend may invoke this from any thread, but never concurrently with itself for
+        /// the same response. Exceptions thrown from this callback are caught at the platform boundary and
+        /// converted into a stream-read failure (the response is truncated). Avoid throwing if you can
+        /// signal "no more bytes" by returning 0 instead.
+        std::function<std::size_t(char* buffer, std::size_t bufferSize)> bodyReader{};
     };
 
     struct CustomScheme
@@ -93,6 +141,12 @@ namespace Nui
 
         /// WINDOWS ONLY - URI contains an authority. like "scheme://AUTHORITY_HERE/path".
         bool hasAuthorityComponent = false;
+
+        /// When true, the backend populates CustomSchemeRequest::readContent (pull-based streaming reader)
+        /// instead of CustomSchemeRequest::getContent. Use for large request bodies that should not be buffered
+        /// into memory in their entirety. Supported fully on Windows and Linux; on macOS the body is already
+        /// fully buffered by the OS so this only offers API consistency, not memory savings.
+        bool streamingContent = false;
     };
 
     struct WindowOptions
@@ -198,7 +252,7 @@ namespace Nui
          * @param height
          * @param hint
          */
-        void setSize(int width, int height, WebViewHint hint = WebViewHint::WEBVIEW_HINT_NONE);
+        void setSize(std::int32_t width, std::int32_t height, WebViewHint hint = WebViewHint::WEBVIEW_HINT_NONE);
 
         /**
          * @brief Sets the position of the window
@@ -207,7 +261,7 @@ namespace Nui
          * @param y yCoordinate
          * @param (MacOS only) use setFrameOrigin instead of setFrameTopLeftPoint (see apple doc)
          */
-        void setPosition(int x, int y, bool useFrameOrigin = true);
+        void setPosition(std::int32_t x, std::int32_t y, bool useFrameOrigin = true);
 
         /**
          * @brief Center the window on the primary display. Requires size to be set first.

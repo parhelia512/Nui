@@ -1,6 +1,128 @@
 // #####################################################################################################################
 namespace Nui
 {
+    namespace Impl::Win
+    {
+        // Minimal IStream implementation that pulls bytes from a std::function reader. Only Read / basic
+        // IUnknown bookkeeping / Stat are implemented — WebView2 doesn't seek response streams.
+        class ReaderBackedStream : public IStream
+        {
+          public:
+            explicit ReaderBackedStream(std::function<std::size_t(char*, std::size_t)> reader)
+                : reader_{std::move(reader)}
+                , refCount_{1}
+            {}
+
+            HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) override
+            {
+                if (ppv == nullptr)
+                    return E_POINTER;
+                if (IsEqualIID(riid, IID_IUnknown) || IsEqualIID(riid, IID_ISequentialStream) ||
+                    IsEqualIID(riid, IID_IStream))
+                {
+                    *ppv = static_cast<IStream*>(this);
+                    AddRef();
+                    return S_OK;
+                }
+                *ppv = nullptr;
+                return E_NOINTERFACE;
+            }
+            ULONG STDMETHODCALLTYPE AddRef() override
+            {
+                return static_cast<ULONG>(++refCount_);
+            }
+            ULONG STDMETHODCALLTYPE Release() override
+            {
+                const auto c = --refCount_;
+                if (c == 0)
+                    delete this;
+                return static_cast<ULONG>(c);
+            }
+
+            HRESULT STDMETHODCALLTYPE Read(void* pv, ULONG cb, ULONG* pcbRead) override
+            {
+                if (pv == nullptr)
+                    return STG_E_INVALIDPOINTER;
+                if (cb == 0)
+                {
+                    if (pcbRead != nullptr)
+                        *pcbRead = 0;
+                    return S_OK;
+                }
+                std::size_t n = 0;
+                if (reader_)
+                {
+                    try
+                    {
+                        n = reader_(static_cast<char*>(pv), static_cast<std::size_t>(cb));
+                    }
+                    catch (...)
+                    {
+                        if (pcbRead != nullptr)
+                            *pcbRead = 0;
+                        return E_FAIL;
+                    }
+                }
+                if (pcbRead != nullptr)
+                    *pcbRead = static_cast<ULONG>(n);
+                // Per IStream contract: S_FALSE signals end-of-stream (zero bytes available). A short read
+                // (n > 0 && n < cb) is permitted by the bodyReader API and must NOT signal EOF — return S_OK.
+                return (n == 0) ? S_FALSE : S_OK;
+            }
+            HRESULT STDMETHODCALLTYPE Write(void const*, ULONG, ULONG*) override
+            {
+                return STG_E_ACCESSDENIED;
+            }
+
+            HRESULT STDMETHODCALLTYPE Seek(LARGE_INTEGER, DWORD, ULARGE_INTEGER*) override
+            {
+                return E_NOTIMPL;
+            }
+            HRESULT STDMETHODCALLTYPE SetSize(ULARGE_INTEGER) override
+            {
+                return E_NOTIMPL;
+            }
+            HRESULT STDMETHODCALLTYPE CopyTo(IStream*, ULARGE_INTEGER, ULARGE_INTEGER*, ULARGE_INTEGER*) override
+            {
+                return E_NOTIMPL;
+            }
+            HRESULT STDMETHODCALLTYPE Commit(DWORD) override
+            {
+                return S_OK;
+            }
+            HRESULT STDMETHODCALLTYPE Revert() override
+            {
+                return E_NOTIMPL;
+            }
+            HRESULT STDMETHODCALLTYPE LockRegion(ULARGE_INTEGER, ULARGE_INTEGER, DWORD) override
+            {
+                return STG_E_INVALIDFUNCTION;
+            }
+            HRESULT STDMETHODCALLTYPE UnlockRegion(ULARGE_INTEGER, ULARGE_INTEGER, DWORD) override
+            {
+                return STG_E_INVALIDFUNCTION;
+            }
+            HRESULT STDMETHODCALLTYPE Stat(STATSTG* pstatstg, DWORD /*grfStatFlag*/) override
+            {
+                if (pstatstg == nullptr)
+                    return STG_E_INVALIDPOINTER;
+                ZeroMemory(pstatstg, sizeof(STATSTG));
+                pstatstg->type = STGTY_STREAM;
+                pstatstg->cbSize.QuadPart = 0; // unknown
+                return S_OK;
+            }
+            HRESULT STDMETHODCALLTYPE Clone(IStream**) override
+            {
+                return E_NOTIMPL;
+            }
+
+          private:
+            virtual ~ReaderBackedStream() = default;
+
+            std::function<std::size_t(char*, std::size_t)> reader_;
+            std::atomic<LONG> refCount_;
+        };
+    } // namespace Impl::Win
     // #####################################################################################################################
     struct Window::WindowsImplementation : public Window::Implementation
     {
@@ -57,7 +179,15 @@ namespace Nui
             Microsoft::WRL::Callback<ICoreWebView2WebResourceRequestedEventHandler>(
                 [this, schemes = options.customSchemes](
                     ICoreWebView2* view, ICoreWebView2WebResourceRequestedEventArgs* args) -> HRESULT {
-                    return onSchemeRequest(schemes, view, args);
+                    // Exceptions must not cross the COM ABI back into WebView2.
+                    try
+                    {
+                        return onSchemeRequest(schemes, view, args);
+                    }
+                    catch (...)
+                    {
+                        return E_FAIL;
+                    }
                 })
                 .Get(),
             &schemeHandlerToken);
@@ -133,8 +263,57 @@ namespace Nui
         if (result != S_OK)
             return {};
 
+        // Resolve body source in priority order: bodyFile > bodyReader > body.
+        // For bodyFile, auto-populate Content-Length from file size when not already provided.
+        auto headers = responseData.headers;
+        int statusCode = responseData.statusCode;
+        std::string phraseUtf8 = responseData.reasonPhrase;
+        Microsoft::WRL::ComPtr<IStream> stream;
+        if (responseData.bodyFile)
+        {
+            const auto& path = *responseData.bodyFile;
+            const auto pathW = path.wstring();
+            const HRESULT fileHr = SHCreateStreamOnFileEx(
+                pathW.c_str(), STGM_READ | STGM_SHARE_DENY_WRITE, FILE_ATTRIBUTE_NORMAL, FALSE, nullptr, &stream);
+            if (SUCCEEDED(fileHr))
+            {
+                if (headers.find("Content-Length") == headers.end())
+                {
+                    std::error_code ec;
+                    const auto size = std::filesystem::file_size(path, ec);
+                    if (!ec)
+                        headers.emplace("Content-Length", std::to_string(size));
+                }
+            }
+            else
+            {
+                // Surface the failure as 500 instead of silently emitting an empty 200 — silent
+                // success-with-empty-body is a cache-poisoning footgun.
+                static constexpr char errorBody[] = "Internal Server Error: bodyFile could not be opened.";
+                statusCode = 500;
+                if (phraseUtf8.empty())
+                    phraseUtf8 = "Internal Server Error";
+                stream.Attach(
+                    SHCreateMemStream(reinterpret_cast<const BYTE*>(errorBody), sizeof(errorBody) - 1));
+                headers.erase("Content-Length");
+                headers.emplace("Content-Length", std::to_string(sizeof(errorBody) - 1));
+                headers.erase("Content-Type");
+                headers.emplace("Content-Type", "text/plain; charset=utf-8");
+            }
+        }
+        else if (responseData.bodyReader)
+        {
+            stream.Attach(new Impl::Win::ReaderBackedStream{responseData.bodyReader});
+        }
+        else
+        {
+            stream.Attach(SHCreateMemStream(
+                reinterpret_cast<const BYTE*>(responseData.body.data()),
+                static_cast<UINT>(responseData.body.size())));
+        }
+
         std::wstring responseHeaders;
-        for (auto const& [key, value] : responseData.headers)
+        for (auto const& [key, value] : headers)
             responseHeaders += utf8ToUtf16<std::wstring, std::string>(key) + L": " +
                 utf8ToUtf16<std::wstring, std::string>(value) + L"\r\n";
         if (!responseHeaders.empty())
@@ -143,13 +322,9 @@ namespace Nui
             responseHeaders.pop_back();
         }
 
-        Microsoft::WRL::ComPtr<IStream> stream;
-        stream.Attach(SHCreateMemStream(
-            reinterpret_cast<const BYTE*>(responseData.body.data()), static_cast<UINT>(responseData.body.size())));
-
-        const auto phrase = utf8ToUtf16<std::wstring, std::string>(responseData.reasonPhrase);
+        const auto phrase = utf8ToUtf16<std::wstring, std::string>(phraseUtf8);
         result = environment->CreateWebResourceResponse(
-            stream.Get(), responseData.statusCode, phrase.c_str(), responseHeaders.c_str(), &response);
+            stream.Get(), statusCode, phrase.c_str(), responseHeaders.c_str(), &response);
 
         return response;
     }
@@ -160,30 +335,60 @@ namespace Nui
         COREWEBVIEW2_WEB_RESOURCE_CONTEXT resourceContext,
         ICoreWebView2WebResourceRequest* webViewRequest)
     {
+        const bool streaming = customScheme.streamingContent;
+
+        // Hold a ref on the request so body-reading lambdas stay safe even if a user copies them out
+        // of the synchronous onRequest scope (the API allows it; we don't want UAF when they do).
+        Microsoft::WRL::ComPtr<ICoreWebView2WebResourceRequest> requestRef{webViewRequest};
+
+        using GetContentVariant =
+            std::variant<std::function<std::string const&()>, std::function<std::string()>>;
+
+        auto getContentStreaming = GetContentVariant{std::function<std::string()>{}};
+        auto getContentBuffered = GetContentVariant{std::function<std::string const&()>{
+            [requestRef, contentMemo = std::string{}]() mutable -> std::string const& {
+                if (!contentMemo.empty())
+                    return contentMemo;
+
+                Microsoft::WRL::ComPtr<IStream> stream;
+                requestRef->get_Content(&stream);
+
+                if (!stream)
+                    return contentMemo;
+
+                constexpr ULONG bufferSize = 16 * 1024;
+                std::array<char, bufferSize> buffer;
+                ULONG bytesRead = 0;
+                do
+                {
+                    stream->Read(buffer.data(), bufferSize, &bytesRead);
+                    contentMemo.append(buffer.data(), bytesRead);
+                } while (bytesRead == bufferSize);
+                return contentMemo;
+            }}};
+
+        auto readContentStreaming = std::function<std::size_t(char*, std::size_t)>{
+            [requestRef, stream = Microsoft::WRL::ComPtr<IStream>{}, initialized = false](
+                char* buffer, std::size_t bufferSize) mutable -> std::size_t {
+                if (!initialized)
+                {
+                    requestRef->get_Content(&stream);
+                    initialized = true;
+                }
+                if (!stream)
+                    return 0;
+                ULONG bytesRead = 0;
+                const HRESULT hr = stream->Read(buffer, static_cast<ULONG>(bufferSize), &bytesRead);
+                if (FAILED(hr))
+                    return 0;
+                return static_cast<std::size_t>(bytesRead);
+            }};
+
         return CustomSchemeRequest{
             .scheme = customScheme.scheme,
-            .getContent =
-                std::function<std::string const&()>{
-                    [webViewRequest, contentMemo = std::string{}]() mutable -> std::string const& {
-                        if (!contentMemo.empty())
-                            return contentMemo;
-
-                        Microsoft::WRL::ComPtr<IStream> stream;
-                        webViewRequest->get_Content(&stream);
-
-                        if (!stream)
-                            return contentMemo;
-
-                        // FIXME: Dont read the whole thing into memory, if possible via streaming.
-                        ULONG bytesRead = 0;
-                        do
-                        {
-                            std::array<char, 1024> buffer;
-                            stream->Read(buffer.data(), 1024, &bytesRead);
-                            contentMemo.append(buffer.data(), bytesRead);
-                        } while (bytesRead == 1024);
-                        return contentMemo;
-                    }},
+            .getContent = streaming ? std::move(getContentStreaming) : std::move(getContentBuffered),
+            .readContent = streaming ? std::move(readContentStreaming)
+                                     : std::function<std::size_t(char*, std::size_t)>{},
             .headers =
                 [webViewRequest]() {
                     ICoreWebView2HttpRequestHeaders* headers;

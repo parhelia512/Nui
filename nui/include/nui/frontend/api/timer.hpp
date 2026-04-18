@@ -37,7 +37,7 @@ namespace Nui
      * @param toWrap The function to call periodically.
      * @param callback This callback receives the interval handle. The timer can be stopped using this handle.
      */
-    void setInterval(int milliseconds, std::function<void()> toWrap, std::function<void(TimerHandle&&)> callback);
+    void setInterval(std::int32_t milliseconds, std::function<void()> toWrap, std::function<void(TimerHandle&&)> callback);
 
     /**
      * @brief Creates a new delayed function that calls "toWrap" after "milliseconds" milliseconds.
@@ -49,5 +49,5 @@ namespace Nui
      * @param toWrap The function to call after the timeout.
      * @param callback This callback receives the timeout handle. The timeout can be stopped using this handle.
      */
-    void setTimeout(int milliseconds, std::function<void()> toWrap, std::function<void(TimerHandle)> callback);
+    void setTimeout(std::int32_t milliseconds, std::function<void()> toWrap, std::function<void(TimerHandle)> callback);
 }

@@ -8,7 +8,7 @@
 namespace Nui
 {
     // #####################################################################################################################
-    AsyncFile::AsyncFile(int32_t id)
+    AsyncFile::AsyncFile(std::int32_t id)
         : fileId_{id}
     {}
     //---------------------------------------------------------------------------------------------------------------------
@@ -20,29 +20,29 @@ namespace Nui
         }
     }
     //---------------------------------------------------------------------------------------------------------------------
-    void AsyncFile::tellg(std::function<void(int32_t)> cb) const
+    void AsyncFile::tellg(std::function<void(std::int64_t)> cb) const
     {
         RpcClient::getRemoteCallableWithBackChannel("Nui::tellg", std::move(cb))(fileId_);
     }
     //---------------------------------------------------------------------------------------------------------------------
-    void AsyncFile::tellp(std::function<void(int32_t)> cb) const
+    void AsyncFile::tellp(std::function<void(std::int64_t)> cb) const
     {
         RpcClient::getRemoteCallableWithBackChannel("Nui::tellp", std::move(cb))(fileId_);
     }
     //---------------------------------------------------------------------------------------------------------------------
-    void AsyncFile::seekg(int32_t pos, std::function<void()> cb, std::ios_base::seekdir dir)
+    void AsyncFile::seekg(std::int64_t pos, std::function<void()> cb, std::ios_base::seekdir dir)
     {
         RpcClient::getRemoteCallableWithBackChannel("Nui::seekg", std::move(cb))(
-            fileId_, pos, static_cast<int32_t>(dir));
+            fileId_, pos, static_cast<std::int32_t>(dir));
     }
     //---------------------------------------------------------------------------------------------------------------------
-    void AsyncFile::seekp(int32_t pos, std::function<void()> cb, std::ios_base::seekdir dir)
+    void AsyncFile::seekp(std::int64_t pos, std::function<void()> cb, std::ios_base::seekdir dir)
     {
         RpcClient::getRemoteCallableWithBackChannel("Nui::seekp", std::move(cb))(
-            fileId_, pos, static_cast<int32_t>(dir));
+            fileId_, pos, static_cast<std::int32_t>(dir));
     }
     //---------------------------------------------------------------------------------------------------------------------
-    void AsyncFile::read(int32_t size, std::function<void(std::string&&)> cb)
+    void AsyncFile::read(std::int32_t size, std::function<void(std::string&&)> cb)
     {
         RpcClient::getRemoteCallableWithBackChannel("Nui::read", std::move(cb))(fileId_, size);
     }
@@ -77,10 +77,10 @@ namespace Nui
                 return;
             }
 
-            int32_t id;
+            std::int32_t id;
             convertFromVal(response["id"], id);
             onOpen(AsyncFile{id});
-        })(filename, static_cast<int32_t>(mode));
+        })(filename, static_cast<std::int32_t>(mode));
     }
     //---------------------------------------------------------------------------------------------------------------------
     void openFile(

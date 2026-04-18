@@ -4,6 +4,19 @@
 
 namespace Nui::MacOs
 {
+    // RAII-retained Objective-C reference. Construction sends `retain`, destruction sends `release`.
+    // shared_ptr aliasing keeps it cheap to copy across captures.
+    inline std::shared_ptr<void> retainObjC(id obj)
+    {
+        if (!obj)
+            return {};
+        msg_send<id>(obj, "retain"_sel);
+        return std::shared_ptr<void>{obj, [](void* p) noexcept {
+                                         if (p)
+                                             msg_send<void>(static_cast<id>(p), "release"_sel);
+                                     }};
+    }
+
     class NuiSchemeHandler
     {
       public:
@@ -62,6 +75,36 @@ namespace Nui::MacOs
         static void startURLSchemeTask(id self, SEL /*_cmd*/, id /*webView*/, id task)
         {
             webview::detail::objc::autoreleasepool pool;
+            // Exceptions must not cross into the Obj-C runtime. On failure, fail the task explicitly so
+            // the renderer doesn't hang waiting for didFinish.
+            try
+            {
+                startURLSchemeTaskImpl(self, task);
+            }
+            catch (std::exception const& ex)
+            {
+                id domain = msg_send<id>("NSString"_cls, "stringWithUTF8String:"_sel, "NuiSchemeHandler");
+                id desc = msg_send<id>("NSString"_cls, "stringWithUTF8String:"_sel, ex.what());
+                id userInfo = msg_send<id>("NSDictionary"_cls, "dictionaryWithObject:forKey:"_sel,
+                    desc, "NSLocalizedDescription"_str);
+                id err = msg_send<id>("NSError"_cls, "errorWithDomain:code:userInfo:"_sel,
+                    domain, static_cast<NSInteger>(-1), userInfo);
+                msg_send<void>(task, "didFailWithError:"_sel, err);
+            }
+            catch (...)
+            {
+                id domain = msg_send<id>("NSString"_cls, "stringWithUTF8String:"_sel, "NuiSchemeHandler");
+                id desc = "Unknown C++ exception in custom scheme handler"_str;
+                id userInfo = msg_send<id>("NSDictionary"_cls, "dictionaryWithObject:forKey:"_sel,
+                    desc, "NSLocalizedDescription"_str);
+                id err = msg_send<id>("NSError"_cls, "errorWithDomain:code:userInfo:"_sel,
+                    domain, static_cast<NSInteger>(-1), userInfo);
+                msg_send<void>(task, "didFailWithError:"_sel, err);
+            }
+        }
+
+        static void startURLSchemeTaskImpl(id self, id task)
+        {
             NuiSchemeHandler* handler = reinterpret_cast<NuiSchemeHandler*>(self);
 
             id request = msg_send<id>(task, "request"_sel);
@@ -69,15 +112,45 @@ namespace Nui::MacOs
             std::string methodStr = msg_send<const char*>(method, "UTF8String"_sel);
             id url = msg_send<id>(request, "URL"_sel);
 
+            const bool streaming = handler->scheme().streamingContent;
+
+            // Hold a strong ref on the request so body-reading lambdas stay safe even if a user copies
+            // them out of the synchronous onRequest scope (the API allows it; we don't want UAF when they do).
+            auto requestRef = retainObjC(request);
+
             CustomSchemeRequest schemeRequest = {
                 .scheme = handler->scheme().scheme,
-                .getContent = std::function<std::string()>{[request]() {
-                    id body = msg_send<id>(request, "HTTPBody"_sel);
+                .getContent = streaming ? std::function<std::string()>{} : std::function<std::string()>{[requestRef]() {
+                    id body = msg_send<id>(static_cast<id>(requestRef.get()), "HTTPBody"_sel);
                     if (!body)
                         return std::string{};
-                    std::string bodyStr = msg_send<const char*>(body, "UTF8String"_sel);
-                    return bodyStr;
+                    const NSUInteger length = msg_send<NSUInteger>(body, "length"_sel);
+                    const void* bytes = msg_send<const void*>(body, "bytes"_sel);
+                    if (!bytes || length == 0)
+                        return std::string{};
+                    return std::string(static_cast<const char*>(bytes), static_cast<std::size_t>(length));
                 }},
+                .readContent = streaming
+                    ? std::function<std::size_t(char*, std::size_t)>{[requestRef, offset = std::size_t{0}](char* buffer, std::size_t bufferSize) mutable -> std::size_t {
+                          id body = msg_send<id>(static_cast<id>(requestRef.get()), "HTTPBody"_sel);
+                          if (!body)
+                              return 0;
+                          const NSUInteger totalLength = msg_send<NSUInteger>(body, "length"_sel);
+                          if (offset >= static_cast<std::size_t>(totalLength))
+                              return 0;
+                          const std::size_t available = static_cast<std::size_t>(totalLength) - offset;
+                          const std::size_t toCopy = available < bufferSize ? available : bufferSize;
+                          struct NuiNSRange
+                          {
+                              NSUInteger location;
+                              NSUInteger length;
+                          };
+                          const NuiNSRange range = {static_cast<NSUInteger>(offset), static_cast<NSUInteger>(toCopy)};
+                          msg_send<void>(body, "getBytes:range:"_sel, buffer, range);
+                          offset += toCopy;
+                          return toCopy;
+                      }}
+                    : std::function<std::size_t(char*, std::size_t)>{},
                 .headers =
                     [request]() {
                         std::unordered_multimap<std::string, std::string> headerMap;
@@ -104,7 +177,30 @@ namespace Nui::MacOs
                 .method = methodStr,
             };
 
-            const auto response = handler->scheme().onRequest(schemeRequest);
+            auto response = handler->scheme().onRequest(schemeRequest);
+
+            // For bodyFile, auto-populate Content-Length from file size when not already provided.
+            // If the file cannot be opened, surface the failure as 500 instead of silently emitting
+            // an empty 200 — silent success-with-empty-body is a cache-poisoning footgun.
+            std::ifstream bodyFileStream;
+            std::optional<std::string> bodyFileErrorBody;
+            if (response.bodyFile)
+            {
+                std::error_code ec;
+                const auto size = std::filesystem::file_size(*response.bodyFile, ec);
+                if (!ec && response.headers.find("Content-Length") == response.headers.end())
+                    response.headers.emplace("Content-Length", std::to_string(size));
+                bodyFileStream.open(*response.bodyFile, std::ios::binary);
+                if (!bodyFileStream.is_open())
+                {
+                    bodyFileErrorBody = "Internal Server Error: bodyFile could not be opened.";
+                    response.statusCode = 500;
+                    response.headers.erase("Content-Length");
+                    response.headers.emplace("Content-Length", std::to_string(bodyFileErrorBody->size()));
+                    response.headers.erase("Content-Type");
+                    response.headers.emplace("Content-Type", "text/plain; charset=utf-8");
+                }
+            }
 
             auto headers = msg_send<id>("NSMutableDictionary"_cls, "dictionary"_sel);
             if (response.headers.find("Access-Control-Allow-Origin") == response.headers.end() &&
@@ -133,12 +229,41 @@ namespace Nui::MacOs
 
             msg_send<void>(task, "didReceiveResponse:"_sel, nsResponse);
 
-            auto data = msg_send<id>(
-                "NSData"_cls,
-                "dataWithBytes:length:"_sel,
-                response.body.data(),
-                static_cast<NSUInteger>(response.body.size()));
-            msg_send<void>(task, "didReceiveData:"_sel, data);
+            // Deliver body in priority order: bodyFile > bodyReader > body.
+            // WKURLSchemeTask supports multiple didReceiveData: calls, so we stream in chunks.
+            // Heap-allocate the chunk so we don't put 64 KiB on the (potentially small) dispatch-queue stack.
+            constexpr std::size_t chunkSize = 64 * 1024;
+            auto chunk = std::make_unique<char[]>(chunkSize);
+
+            auto sendChunk = [&](const void* bytes, std::size_t n) {
+                id data = msg_send<id>(
+                    "NSData"_cls, "dataWithBytes:length:"_sel, bytes, static_cast<NSUInteger>(n));
+                msg_send<void>(task, "didReceiveData:"_sel, data);
+            };
+
+            if (bodyFileErrorBody)
+            {
+                sendChunk(bodyFileErrorBody->data(), bodyFileErrorBody->size());
+            }
+            else if (response.bodyFile)
+            {
+                auto readNext = [&]() -> std::size_t {
+                    bodyFileStream.read(chunk.get(), chunkSize);
+                    return static_cast<std::size_t>(bodyFileStream.gcount());
+                };
+                for (auto n = readNext(); n > 0; n = readNext())
+                    sendChunk(chunk.get(), n);
+            }
+            else if (response.bodyReader)
+            {
+                for (auto n = response.bodyReader(chunk.get(), chunkSize); n > 0;
+                     n = response.bodyReader(chunk.get(), chunkSize))
+                    sendChunk(chunk.get(), n);
+            }
+            else
+            {
+                sendChunk(response.body.data(), response.body.size());
+            }
             msg_send<void>(task, "didFinish"_sel);
         }
 

@@ -118,8 +118,8 @@ namespace Nui
         std::unique_ptr<webview::webview> view;
         std::vector<std::filesystem::path> cleanupFiles;
         std::unordered_map<std::string, std::function<void(nlohmann::json const&)>> callbacks;
-        int width;
-        int height;
+        std::int32_t width;
+        std::int32_t height;
         std::function<void(std::string_view)> onRpcError;
         std::function<void()> onRpcAliveMessage;
         bool isRunning{false};
@@ -308,7 +308,7 @@ namespace Nui
         impl_->view->set_title(title);
     }
     //---------------------------------------------------------------------------------------------------------------------
-    void Window::setSize(int width, int height, WebViewHint hint)
+    void Window::setSize(std::int32_t width, std::int32_t height, WebViewHint hint)
     {
         std::scoped_lock lock{impl_->viewGuard};
         impl_->width = width;
@@ -512,7 +512,7 @@ namespace Nui
         impl_->view->terminate();
     }
     //---------------------------------------------------------------------------------------------------------------------
-    void Window::setPosition(int x, int y, bool useFrameOrigin)
+    void Window::setPosition(std::int32_t x, std::int32_t y, bool useFrameOrigin)
     {
         std::scoped_lock lock{impl_->viewGuard};
 #if defined(_WIN32)

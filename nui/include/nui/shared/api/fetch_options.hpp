@@ -20,7 +20,7 @@ namespace Nui
         std::string body = "";
         bool verbose = false;
         bool followRedirects = false;
-        long maxRedirects = 255;
+        std::int32_t maxRedirects = 255;
         bool autoReferer = false;
         // body is encoded as base64 to get it through to the webview. setting this option preserves the body as base64
         bool dontDecodeBody = false;
