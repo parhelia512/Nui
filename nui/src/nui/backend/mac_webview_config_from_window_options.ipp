@@ -72,8 +72,6 @@ namespace Nui::MacOs
             return m_scheme;
         }
 
-        static void startURLSchemeTaskImpl(id self, id task);
-
         static void startURLSchemeTask(id self, SEL /*_cmd*/, id /*webView*/, id task)
         {
             webview::detail::objc::autoreleasepool pool;
@@ -142,7 +140,12 @@ namespace Nui::MacOs
                               return 0;
                           const std::size_t available = static_cast<std::size_t>(totalLength) - offset;
                           const std::size_t toCopy = available < bufferSize ? available : bufferSize;
-                          const NSRange range = {static_cast<NSUInteger>(offset), static_cast<NSUInteger>(toCopy)};
+                          struct NuiNSRange
+                          {
+                              NSUInteger location;
+                              NSUInteger length;
+                          };
+                          const NuiNSRange range = {static_cast<NSUInteger>(offset), static_cast<NSUInteger>(toCopy)};
                           msg_send<void>(body, "getBytes:range:"_sel, buffer, range);
                           offset += toCopy;
                           return toCopy;
