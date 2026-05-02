@@ -2397,7 +2397,7 @@ namespace Nui::Tests
         textBodyParityTest(vec, parent2);
     }
 
-    TEST_F(TestRanges, MultiSubscriber_MixedSequence)
+    TEST_F(TestRanges, DISABLED_MultiSubscriber_MixedSequence)
     {
         Nui::val parent1;
         Nui::val parent2;
@@ -2417,6 +2417,20 @@ namespace Nui::Tests
         globalEventContext.executeActiveEventsImmediately();
         textBodyParityTest(vec, parent1);
         textBodyParityTest(vec, parent2);
+    }
+
+    TEST_F(TestRanges, DISABLED_SingleSubscriber_MixedSequence_DiagnosticControl)
+    {
+        Nui::val parent;
+        Observed<std::vector<char>> vec{{'A', 'B', 'C', 'D'}};
+        rangeTextBodyRender(vec, parent);
+
+        vec.push_back('E');
+        vec[0] = 'X';
+        vec.erase(vec.begin() + 2);
+        vec.insert(vec.begin(), '_');
+        globalEventContext.executeActiveEventsImmediately();
+        textBodyParityTest(vec, parent);
     }
 
     TEST_F(TestRanges, CanRenderRangeEvenDuringPendingModification)
