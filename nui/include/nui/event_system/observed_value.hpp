@@ -1204,6 +1204,10 @@ namespace Nui
         {
             return *rangeContext_;
         }
+        void attachReaderContext(std::shared_ptr<RangeEventContext> const& ctx) const
+        {
+            readerContexts_.emplace_back(ctx);
+        }
 
       protected:
         void update(bool force = false) const override
@@ -1215,6 +1219,24 @@ namespace Nui
         }
 
       protected:
+        template <typename Fn>
+        void forEachReaderContext(Fn const& fn) const
+        {
+            auto it = readerContexts_.begin();
+            while (it != readerContexts_.end())
+            {
+                if (auto shared = it->lock())
+                {
+                    fn(*shared);
+                    ++it;
+                }
+                else
+                {
+                    it = readerContexts_.erase(it);
+                }
+            }
+        }
+
         void insertRangeChecked(std::size_t low, std::size_t high, RangeOperationType type)
         {
             std::function<void(int)> doInsert;
@@ -1287,6 +1309,7 @@ namespace Nui
         MoveDetector moveDetector_;
         mutable std::shared_ptr<RangeEventContext> rangeContext_;
         mutable EventContext::EventIdType afterEffectId_;
+        mutable std::vector<std::weak_ptr<RangeEventContext>> readerContexts_;
     };
 
     template <typename T, typename Tags = void>
