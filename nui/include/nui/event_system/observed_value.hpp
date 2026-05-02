@@ -806,6 +806,7 @@ namespace Nui
         {
             contained_ = std::forward<T>(t);
             rangeContext_->reset(true);
+            forEachReaderContext([](RangeEventContext& c) { c.reset(true); });
             update();
             return *this;
         }
@@ -813,6 +814,7 @@ namespace Nui
         {
             contained_.assign(count, value);
             rangeContext_->reset(true);
+            forEachReaderContext([](RangeEventContext& c) { c.reset(true); });
             update();
         }
         template <typename Iterator>
@@ -820,12 +822,14 @@ namespace Nui
         {
             contained_.assign(first, last);
             rangeContext_->reset(true);
+            forEachReaderContext([](RangeEventContext& c) { c.reset(true); });
             update();
         }
         void assign(std::initializer_list<value_type> ilist)
         {
             contained_.assign(ilist);
             rangeContext_->reset(true);
+            forEachReaderContext([](RangeEventContext& c) { c.reset(true); });
             update();
         }
 
@@ -957,6 +961,7 @@ namespace Nui
         {
             contained_.clear();
             rangeContext_->reset(true);
+            forEachReaderContext([](RangeEventContext& c) { c.reset(true); });
             update();
         }
         template <typename U = ContainerT>
@@ -969,6 +974,7 @@ namespace Nui
 
             const auto result = contained_.insert(value);
             rangeContext_->performFullRangeUpdate();
+            forEachReaderContext([](RangeEventContext& c) { c.performFullRangeUpdate(); });
             update();
             ObservedBase::eventContext_->executeActiveEventsImmediately();
             return result;
@@ -983,6 +989,7 @@ namespace Nui
 
             const auto result = contained_.insert(std::move(value));
             rangeContext_->performFullRangeUpdate();
+            forEachReaderContext([](RangeEventContext& c) { c.performFullRangeUpdate(); });
             update();
             ObservedBase::eventContext_->executeActiveEventsImmediately();
             return result;
@@ -1184,6 +1191,7 @@ namespace Nui
         {
             contained_.swap(other);
             rangeContext_->reset(true);
+            forEachReaderContext([](RangeEventContext& c) { c.reset(true); });
             update();
         }
 
@@ -1206,14 +1214,17 @@ namespace Nui
         }
         void attachReaderContext(std::shared_ptr<RangeEventContext> const& ctx) const
         {
-            readerContexts_.emplace_back(ctx);
+            readerContexts_->emplace_back(ctx);
         }
 
       protected:
         void update(bool force = false) const override
         {
             if (force)
+            {
                 rangeContext_->reset(true);
+                forEachReaderContext([](RangeEventContext& c) { c.reset(true); });
+            }
             ObservedBase::eventContext_->activateAfterEffect(afterEffectId_);
             ObservedBase::update(force);
         }
@@ -1222,8 +1233,9 @@ namespace Nui
         template <typename Fn>
         void forEachReaderContext(Fn const& fn) const
         {
-            auto it = readerContexts_.begin();
-            while (it != readerContexts_.end())
+            auto& readers = *readerContexts_;
+            auto it = readers.begin();
+            while (it != readers.end())
             {
                 if (auto shared = it->lock())
                 {
@@ -1232,7 +1244,7 @@ namespace Nui
                 }
                 else
                 {
-                    it = readerContexts_.erase(it);
+                    it = readers.erase(it);
                 }
             }
         }
@@ -1244,6 +1256,7 @@ namespace Nui
                 NUI_ASSERT(ObservedBase::eventContext_ != nullptr, "Event context must never be null.");
 
                 const auto result = rangeContext_->insertModificationRange(low, high, type);
+                forEachReaderContext([&](RangeEventContext& c) { c.insertModificationRange(low, high, type); });
                 if (result == RangeEventContext::InsertResult::Perform)
                 {
                     update();
@@ -1259,6 +1272,7 @@ namespace Nui
                     else
                     {
                         rangeContext_->reset(true);
+                        forEachReaderContext([](RangeEventContext& c) { c.reset(true); });
                         update();
                         ObservedBase::eventContext_->executeActiveEventsImmediately();
                         return;
@@ -1272,6 +1286,7 @@ namespace Nui
                 {
                     // Rejected! (why?)
                     rangeContext_->reset(true);
+                    forEachReaderContext([](RangeEventContext& c) { c.reset(true); });
                     update();
                     ObservedBase::eventContext_->executeActiveEventsImmediately();
                     return;
@@ -1285,19 +1300,29 @@ namespace Nui
         {
             NUI_ASSERT(ObservedBase::eventContext_ != nullptr, "Event context must never be null.");
             return ObservedBase::eventContext_->registerAfterEffect(
-                Event{[weak = std::weak_ptr<RangeEventContext>{rangeContext_}](EventContext::EventIdType) {
-                    if (auto shared = weak.lock(); shared)
+                Event{[weak = std::weak_ptr<RangeEventContext>{rangeContext_},
+                       weakReaders = std::weak_ptr<std::vector<std::weak_ptr<RangeEventContext>>>{
+                           readerContexts_}](EventContext::EventIdType) {
+                    auto shared = weak.lock();
+                    if (!shared)
+                        return false;
+                    shared->reset();
+                    if (auto sharedReaders = weakReaders.lock())
                     {
-                        shared->reset();
-                        return true;
+                        for (auto& w : *sharedReaders)
+                        {
+                            if (auto r = w.lock())
+                                r->reset();
+                        }
                     }
-                    return false;
+                    return true;
                 }});
         }
 
         void eraseNotify(std::size_t index, std::size_t high)
         {
             const bool fixupPerformed = rangeContext_->eraseNotify(index, high);
+            forEachReaderContext([&](RangeEventContext& c) { c.eraseNotify(index, high); });
             if (fixupPerformed) // FORCE update:
             {
                 update();
@@ -1308,8 +1333,9 @@ namespace Nui
       protected:
         MoveDetector moveDetector_;
         mutable std::shared_ptr<RangeEventContext> rangeContext_;
+        mutable std::shared_ptr<std::vector<std::weak_ptr<RangeEventContext>>> readerContexts_{
+            std::make_shared<std::vector<std::weak_ptr<RangeEventContext>>>()};
         mutable EventContext::EventIdType afterEffectId_;
-        mutable std::vector<std::weak_ptr<RangeEventContext>> readerContexts_;
     };
 
     template <typename T, typename Tags = void>
