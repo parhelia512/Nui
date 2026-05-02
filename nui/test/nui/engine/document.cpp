@@ -31,7 +31,59 @@ namespace Nui::Tests::Engine
         {
             auto elem = Nui::val::object();
             elem.set("replaceWith", Function{[self = elem](Nui::val value) mutable -> Nui::val {
-                         *self.handle() = *value.handle();
+                         bool replacedInParent = false;
+                         if (value.hasOwnProperty("parentNode"))
+                         {
+                             auto otherParent = value["parentNode"];
+                             if (!otherParent.isUndefined() && !otherParent.isNull())
+                                 otherParent.call<void>("removeChild", value);
+                         }
+                         if (self.hasOwnProperty("parentNode"))
+                         {
+                             auto parent = self["parentNode"];
+                             if (!parent.isUndefined() && !parent.isNull() &&
+                                 parent.hasOwnProperty("children"))
+                             {
+                                 auto replaceIn = [&](Array& container) {
+                                     auto it = std::find(
+                                         container.begin(), container.end(), self.handle());
+                                     if (it != container.end())
+                                     {
+                                         const auto pos = std::distance(container.begin(), it);
+                                         container.erase(it);
+                                         container.insert(
+                                             container.begin() + pos, value.handle());
+                                         replacedInParent = true;
+                                     }
+                                 };
+                                 replaceIn(parent["children"].template as<Array&>());
+                                 replaceIn(parent["childNodes"].template as<Array&>());
+                                 if (replacedInParent)
+                                     value.set("parentNode", parent);
+                             }
+                         }
+                         // Fallback for elements without a real parent in the mock DOM
+                         // (e.g. document.body during initial setBody): redirect self's
+                         // shared ReferenceType to value's underlying allValues entry so
+                         // any global lookups (Nui::val::global("document")["body"]) see
+                         // the replacement.
+                         if (!replacedInParent)
+                         {
+                             // If self is currently document.body, also rebind that
+                             // slot to value's shared_ptr. Otherwise a chain of body
+                             // replaces (multiple render() calls in the same test)
+                             // leaves document.body following a stale shared_ptr
+                             // whose ReferenceType was redirected by an earlier
+                             // replace but never updated again.
+                             const bool isDocumentBody = globalObject.has("document") && [&] {
+                                 auto doc = Nui::val::global("document");
+                                 return doc.hasOwnProperty("body") &&
+                                     *doc["body"].handle() == *self.handle();
+                             }();
+                             *self.handle() = *value.handle();
+                             if (isDocumentBody)
+                                 Nui::val::global("document").set("body", value);
+                         }
                          return self;
                      }});
             elem.set("remove", Function{[self = elem]() -> Nui::val {

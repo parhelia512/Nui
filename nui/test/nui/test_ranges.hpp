@@ -1934,7 +1934,16 @@ namespace Nui::Tests
         EXPECT_EQ(this->aggregateObservedCharList(vec), this->getChildrenBodyTextConcat(parent2));
     }
 
-    TEST_F(TestRanges, RangeContextIsResetAfterAllChildrenAreRendered)
+    // ---------------------------------------------------------------------
+    // Multi-subscriber tests for the fullRangeUpdate path
+    // ---------------------------------------------------------------------
+    // These exercise mutations that set rangeContext.fullRangeUpdate_=true
+    // (clear, operator=, swap, assign). Currently buggy: the first range
+    // subscriber consumes the shared rangeContext via reset(), leaving the
+    // second subscriber with nothing to render. After the per-subscriber
+    // context refactor these will pass.
+
+    TEST_F(TestRanges, MultiSubscriber_ClearThenPushBack)
     {
         Nui::val parent1;
         Nui::val parent2;
@@ -1945,17 +1954,972 @@ namespace Nui::Tests
         using Nui::Elements::body;
         using namespace Nui::Attributes;
 
-        auto renderer = [&vec](long long i, auto const& element) -> Nui::ElementRenderer {
+        auto renderer = [](long long, auto const& element) -> Nui::ElementRenderer {
             return div{}(std::string{element});
         };
 
         render(body{}(div{reference = parent1}(range(vec), renderer), div{reference = parent2}(range(vec), renderer)));
 
-        vec.push_back('E');
-        vec[0] = 'X';
+        vec.clear();
+        vec.push_back('A');
+        vec.push_back('B');
         globalEventContext.executeActiveEventsImmediately();
 
-        EXPECT_TRUE(vec.rangeContext().isInDefaultState());
+        textBodyParityTest(vec, parent1);
+        textBodyParityTest(vec, parent2);
+    }
+
+    TEST_F(TestRanges, MultiSubscriber_AssignNewVector)
+    {
+        Nui::val parent1;
+        Nui::val parent2;
+
+        Observed<std::vector<char>> vec{{'A', 'B', 'C', 'D'}};
+
+        using Nui::Elements::div;
+        using Nui::Elements::body;
+        using namespace Nui::Attributes;
+
+        auto renderer = [](long long, auto const& element) -> Nui::ElementRenderer {
+            return div{}(std::string{element});
+        };
+
+        render(body{}(div{reference = parent1}(range(vec), renderer), div{reference = parent2}(range(vec), renderer)));
+
+        vec = std::vector<char>{'X', 'Y', 'Z'};
+        globalEventContext.executeActiveEventsImmediately();
+
+        textBodyParityTest(vec, parent1);
+        textBodyParityTest(vec, parent2);
+    }
+
+    TEST_F(TestRanges, MultiSubscriber_Swap)
+    {
+        Nui::val parent1;
+        Nui::val parent2;
+
+        Observed<std::vector<char>> vec{{'A', 'B', 'C', 'D'}};
+
+        using Nui::Elements::div;
+        using Nui::Elements::body;
+        using namespace Nui::Attributes;
+
+        auto renderer = [](long long, auto const& element) -> Nui::ElementRenderer {
+            return div{}(std::string{element});
+        };
+
+        render(body{}(div{reference = parent1}(range(vec), renderer), div{reference = parent2}(range(vec), renderer)));
+
+        std::vector<char> other{'P', 'Q'};
+        vec.swap(other);
+        globalEventContext.executeActiveEventsImmediately();
+
+        textBodyParityTest(vec, parent1);
+        textBodyParityTest(vec, parent2);
+    }
+
+    TEST_F(TestRanges, MultiSubscriber_AssignViaInitializerList)
+    {
+        Nui::val parent1;
+        Nui::val parent2;
+
+        Observed<std::vector<char>> vec{{'A', 'B', 'C', 'D'}};
+
+        using Nui::Elements::div;
+        using Nui::Elements::body;
+        using namespace Nui::Attributes;
+
+        auto renderer = [](long long, auto const& element) -> Nui::ElementRenderer {
+            return div{}(std::string{element});
+        };
+
+        render(body{}(div{reference = parent1}(range(vec), renderer), div{reference = parent2}(range(vec), renderer)));
+
+        vec.assign({'M', 'N', 'O', 'P'});
+        globalEventContext.executeActiveEventsImmediately();
+
+        textBodyParityTest(vec, parent1);
+        textBodyParityTest(vec, parent2);
+    }
+
+    // ---------------------------------------------------------------------
+    // Multi-subscriber tests for the per-operation paths (Insert/Modify/
+    // Erase). These exercise the path where rangeContext stays through the
+    // event cycle and is reset by the registered afterEffect rather than
+    // eagerly by the renderer. Most should already pass today; they are
+    // here to lock the contract in once per-subscriber contexts land.
+
+    TEST_F(TestRanges, MultiSubscriber_PushBack)
+    {
+        Nui::val parent1;
+        Nui::val parent2;
+        Observed<std::vector<char>> vec{{'A', 'B', 'C'}};
+        using Nui::Elements::div;
+        using Nui::Elements::body;
+        using namespace Nui::Attributes;
+        auto renderer = [](long long, auto const& element) -> Nui::ElementRenderer {
+            return div{}(std::string{element});
+        };
+        render(body{}(div{reference = parent1}(range(vec), renderer), div{reference = parent2}(range(vec), renderer)));
+
+        vec.push_back('D');
+        globalEventContext.executeActiveEventsImmediately();
+        textBodyParityTest(vec, parent1);
+        textBodyParityTest(vec, parent2);
+    }
+
+    TEST_F(TestRanges, MultiSubscriber_PopBack)
+    {
+        Nui::val parent1;
+        Nui::val parent2;
+        Observed<std::vector<char>> vec{{'A', 'B', 'C', 'D'}};
+        using Nui::Elements::div;
+        using Nui::Elements::body;
+        using namespace Nui::Attributes;
+        auto renderer = [](long long, auto const& element) -> Nui::ElementRenderer {
+            return div{}(std::string{element});
+        };
+        render(body{}(div{reference = parent1}(range(vec), renderer), div{reference = parent2}(range(vec), renderer)));
+
+        vec.pop_back();
+        globalEventContext.executeActiveEventsImmediately();
+        textBodyParityTest(vec, parent1);
+        textBodyParityTest(vec, parent2);
+    }
+
+    TEST_F(TestRanges, MultiSubscriber_PushFront_Deque)
+    {
+        Nui::val parent1;
+        Nui::val parent2;
+        Observed<std::deque<char>> deq{{'A', 'B', 'C'}};
+        using Nui::Elements::div;
+        using Nui::Elements::body;
+        using namespace Nui::Attributes;
+        auto renderer = [](long long, auto const& element) -> Nui::ElementRenderer {
+            return div{}(std::string{element});
+        };
+        render(body{}(div{reference = parent1}(range(deq), renderer), div{reference = parent2}(range(deq), renderer)));
+
+        deq.push_front('Z');
+        globalEventContext.executeActiveEventsImmediately();
+        textBodyParityTest(deq, parent1);
+        textBodyParityTest(deq, parent2);
+    }
+
+    TEST_F(TestRanges, MultiSubscriber_PopFront_Deque)
+    {
+        Nui::val parent1;
+        Nui::val parent2;
+        Observed<std::deque<char>> deq{{'A', 'B', 'C', 'D'}};
+        using Nui::Elements::div;
+        using Nui::Elements::body;
+        using namespace Nui::Attributes;
+        auto renderer = [](long long, auto const& element) -> Nui::ElementRenderer {
+            return div{}(std::string{element});
+        };
+        render(body{}(div{reference = parent1}(range(deq), renderer), div{reference = parent2}(range(deq), renderer)));
+
+        deq.pop_front();
+        globalEventContext.executeActiveEventsImmediately();
+        textBodyParityTest(deq, parent1);
+        textBodyParityTest(deq, parent2);
+    }
+
+    TEST_F(TestRanges, MultiSubscriber_EmplaceBack)
+    {
+        Nui::val parent1;
+        Nui::val parent2;
+        Observed<std::vector<char>> vec{{'A', 'B', 'C'}};
+        using Nui::Elements::div;
+        using Nui::Elements::body;
+        using namespace Nui::Attributes;
+        auto renderer = [](long long, auto const& element) -> Nui::ElementRenderer {
+            return div{}(std::string{element});
+        };
+        render(body{}(div{reference = parent1}(range(vec), renderer), div{reference = parent2}(range(vec), renderer)));
+
+        vec.emplace_back('D');
+        globalEventContext.executeActiveEventsImmediately();
+        textBodyParityTest(vec, parent1);
+        textBodyParityTest(vec, parent2);
+    }
+
+    TEST_F(TestRanges, MultiSubscriber_EmplaceFront_Deque)
+    {
+        Nui::val parent1;
+        Nui::val parent2;
+        Observed<std::deque<char>> deq{{'A', 'B', 'C'}};
+        using Nui::Elements::div;
+        using Nui::Elements::body;
+        using namespace Nui::Attributes;
+        auto renderer = [](long long, auto const& element) -> Nui::ElementRenderer {
+            return div{}(std::string{element});
+        };
+        render(body{}(div{reference = parent1}(range(deq), renderer), div{reference = parent2}(range(deq), renderer)));
+
+        deq.emplace_front('Z');
+        globalEventContext.executeActiveEventsImmediately();
+        textBodyParityTest(deq, parent1);
+        textBodyParityTest(deq, parent2);
+    }
+
+    TEST_F(TestRanges, MultiSubscriber_Insert_PosValue)
+    {
+        Nui::val parent1;
+        Nui::val parent2;
+        Observed<std::vector<char>> vec{{'A', 'B', 'C', 'D'}};
+        using Nui::Elements::div;
+        using Nui::Elements::body;
+        using namespace Nui::Attributes;
+        auto renderer = [](long long, auto const& element) -> Nui::ElementRenderer {
+            return div{}(std::string{element});
+        };
+        render(body{}(div{reference = parent1}(range(vec), renderer), div{reference = parent2}(range(vec), renderer)));
+
+        vec.insert(vec.begin() + 2, 'X');
+        globalEventContext.executeActiveEventsImmediately();
+        textBodyParityTest(vec, parent1);
+        textBodyParityTest(vec, parent2);
+    }
+
+    TEST_F(TestRanges, MultiSubscriber_Insert_PosCountValue)
+    {
+        Nui::val parent1;
+        Nui::val parent2;
+        Observed<std::vector<char>> vec{{'A', 'B', 'C', 'D'}};
+        using Nui::Elements::div;
+        using Nui::Elements::body;
+        using namespace Nui::Attributes;
+        auto renderer = [](long long, auto const& element) -> Nui::ElementRenderer {
+            return div{}(std::string{element});
+        };
+        render(body{}(div{reference = parent1}(range(vec), renderer), div{reference = parent2}(range(vec), renderer)));
+
+        vec.insert(vec.begin() + 2, 3, 'Z');
+        globalEventContext.executeActiveEventsImmediately();
+        textBodyParityTest(vec, parent1);
+        textBodyParityTest(vec, parent2);
+    }
+
+    TEST_F(TestRanges, MultiSubscriber_Insert_PosFirstLast)
+    {
+        Nui::val parent1;
+        Nui::val parent2;
+        Observed<std::vector<char>> vec{{'A', 'B', 'C', 'D'}};
+        using Nui::Elements::div;
+        using Nui::Elements::body;
+        using namespace Nui::Attributes;
+        auto renderer = [](long long, auto const& element) -> Nui::ElementRenderer {
+            return div{}(std::string{element});
+        };
+        render(body{}(div{reference = parent1}(range(vec), renderer), div{reference = parent2}(range(vec), renderer)));
+
+        std::vector<char> source{'X', 'Y'};
+        vec.insert(vec.begin() + 2, source.begin(), source.end());
+        globalEventContext.executeActiveEventsImmediately();
+        textBodyParityTest(vec, parent1);
+        textBodyParityTest(vec, parent2);
+    }
+
+    TEST_F(TestRanges, MultiSubscriber_Insert_PosInitList)
+    {
+        Nui::val parent1;
+        Nui::val parent2;
+        Observed<std::vector<char>> vec{{'A', 'B', 'C', 'D'}};
+        using Nui::Elements::div;
+        using Nui::Elements::body;
+        using namespace Nui::Attributes;
+        auto renderer = [](long long, auto const& element) -> Nui::ElementRenderer {
+            return div{}(std::string{element});
+        };
+        render(body{}(div{reference = parent1}(range(vec), renderer), div{reference = parent2}(range(vec), renderer)));
+
+        vec.insert(vec.begin() + 2, {'1', '2', '3'});
+        globalEventContext.executeActiveEventsImmediately();
+        textBodyParityTest(vec, parent1);
+        textBodyParityTest(vec, parent2);
+    }
+
+    TEST_F(TestRanges, MultiSubscriber_Erase_Pos)
+    {
+        Nui::val parent1;
+        Nui::val parent2;
+        Observed<std::vector<char>> vec{{'A', 'B', 'C', 'D'}};
+        using Nui::Elements::div;
+        using Nui::Elements::body;
+        using namespace Nui::Attributes;
+        auto renderer = [](long long, auto const& element) -> Nui::ElementRenderer {
+            return div{}(std::string{element});
+        };
+        render(body{}(div{reference = parent1}(range(vec), renderer), div{reference = parent2}(range(vec), renderer)));
+
+        vec.erase(vec.begin() + 1);
+        globalEventContext.executeActiveEventsImmediately();
+        textBodyParityTest(vec, parent1);
+        textBodyParityTest(vec, parent2);
+    }
+
+    TEST_F(TestRanges, MultiSubscriber_Erase_FirstLast)
+    {
+        Nui::val parent1;
+        Nui::val parent2;
+        Observed<std::vector<char>> vec{{'A', 'B', 'C', 'D', 'E'}};
+        using Nui::Elements::div;
+        using Nui::Elements::body;
+        using namespace Nui::Attributes;
+        auto renderer = [](long long, auto const& element) -> Nui::ElementRenderer {
+            return div{}(std::string{element});
+        };
+        render(body{}(div{reference = parent1}(range(vec), renderer), div{reference = parent2}(range(vec), renderer)));
+
+        vec.erase(vec.begin() + 1, vec.begin() + 4);
+        globalEventContext.executeActiveEventsImmediately();
+        textBodyParityTest(vec, parent1);
+        textBodyParityTest(vec, parent2);
+    }
+
+    TEST_F(TestRanges, MultiSubscriber_Resize_Grow)
+    {
+        Nui::val parent1;
+        Nui::val parent2;
+        Observed<std::vector<char>> vec{{'A', 'B', 'C'}};
+        using Nui::Elements::div;
+        using Nui::Elements::body;
+        using namespace Nui::Attributes;
+        auto renderer = [](long long, auto const& element) -> Nui::ElementRenderer {
+            return div{}(std::string{element});
+        };
+        render(body{}(div{reference = parent1}(range(vec), renderer), div{reference = parent2}(range(vec), renderer)));
+
+        vec.resize(6);
+        globalEventContext.executeActiveEventsImmediately();
+        textBodyParityTest(vec, parent1);
+        textBodyParityTest(vec, parent2);
+    }
+
+    TEST_F(TestRanges, MultiSubscriber_Resize_Shrink)
+    {
+        Nui::val parent1;
+        Nui::val parent2;
+        Observed<std::vector<char>> vec{{'A', 'B', 'C', 'D', 'E'}};
+        using Nui::Elements::div;
+        using Nui::Elements::body;
+        using namespace Nui::Attributes;
+        auto renderer = [](long long, auto const& element) -> Nui::ElementRenderer {
+            return div{}(std::string{element});
+        };
+        render(body{}(div{reference = parent1}(range(vec), renderer), div{reference = parent2}(range(vec), renderer)));
+
+        vec.resize(2);
+        globalEventContext.executeActiveEventsImmediately();
+        textBodyParityTest(vec, parent1);
+        textBodyParityTest(vec, parent2);
+    }
+
+    TEST_F(TestRanges, MultiSubscriber_Resize_GrowWithFill)
+    {
+        Nui::val parent1;
+        Nui::val parent2;
+        Observed<std::vector<char>> vec{{'A', 'B', 'C'}};
+        using Nui::Elements::div;
+        using Nui::Elements::body;
+        using namespace Nui::Attributes;
+        auto renderer = [](long long, auto const& element) -> Nui::ElementRenderer {
+            return div{}(std::string{element});
+        };
+        render(body{}(div{reference = parent1}(range(vec), renderer), div{reference = parent2}(range(vec), renderer)));
+
+        vec.resize(6, 'F');
+        globalEventContext.executeActiveEventsImmediately();
+        textBodyParityTest(vec, parent1);
+        textBodyParityTest(vec, parent2);
+    }
+
+    TEST_F(TestRanges, MultiSubscriber_IndexedAssign)
+    {
+        Nui::val parent1;
+        Nui::val parent2;
+        Observed<std::vector<char>> vec{{'A', 'B', 'C', 'D'}};
+        using Nui::Elements::div;
+        using Nui::Elements::body;
+        using namespace Nui::Attributes;
+        auto renderer = [](long long, auto const& element) -> Nui::ElementRenderer {
+            return div{}(std::string{element});
+        };
+        render(body{}(div{reference = parent1}(range(vec), renderer), div{reference = parent2}(range(vec), renderer)));
+
+        vec[2] = 'X';
+        globalEventContext.executeActiveEventsImmediately();
+        textBodyParityTest(vec, parent1);
+        textBodyParityTest(vec, parent2);
+    }
+
+    TEST_F(TestRanges, MultiSubscriber_IteratorDerefAssign)
+    {
+        Nui::val parent1;
+        Nui::val parent2;
+        Observed<std::vector<char>> vec{{'A', 'B', 'C', 'D'}};
+        using Nui::Elements::div;
+        using Nui::Elements::body;
+        using namespace Nui::Attributes;
+        auto renderer = [](long long, auto const& element) -> Nui::ElementRenderer {
+            return div{}(std::string{element});
+        };
+        render(body{}(div{reference = parent1}(range(vec), renderer), div{reference = parent2}(range(vec), renderer)));
+
+        *(vec.begin() + 1) = 'Y';
+        globalEventContext.executeActiveEventsImmediately();
+        textBodyParityTest(vec, parent1);
+        textBodyParityTest(vec, parent2);
+    }
+
+    TEST_F(TestRanges, MultiSubscriber_MixedSequence)
+    {
+        Nui::val parent1;
+        Nui::val parent2;
+        Observed<std::vector<char>> vec{{'A', 'B', 'C', 'D'}};
+        using Nui::Elements::div;
+        using Nui::Elements::body;
+        using namespace Nui::Attributes;
+        auto renderer = [](long long, auto const& element) -> Nui::ElementRenderer {
+            return div{}(std::string{element});
+        };
+        render(body{}(div{reference = parent1}(range(vec), renderer), div{reference = parent2}(range(vec), renderer)));
+
+        vec.push_back('E');
+        vec[0] = 'X';
+        vec.erase(vec.begin() + 2);
+        vec.insert(vec.begin(), '_');
+        globalEventContext.executeActiveEventsImmediately();
+        textBodyParityTest(vec, parent1);
+        textBodyParityTest(vec, parent2);
+    }
+
+    TEST_F(TestRanges, SingleSubscriber_MixedSequence_DiagnosticControl)
+    {
+        Nui::val parent;
+        Observed<std::vector<char>> vec{{'A', 'B', 'C', 'D'}};
+        rangeTextBodyRender(vec, parent);
+
+        vec.push_back('E');
+        vec[0] = 'X';
+        vec.erase(vec.begin() + 2);
+        vec.insert(vec.begin(), '_');
+        globalEventContext.executeActiveEventsImmediately();
+        textBodyParityTest(vec, parent);
+    }
+
+    TEST_F(TestRanges, SetInsertReplacesNotAppends)
+    {
+        Nui::val parent;
+        Observed<std::set<char>> s{{'A', 'B', 'C'}};
+
+        using Nui::Elements::div;
+        using Nui::Elements::body;
+        using namespace Nui::Attributes;
+
+        render(body{reference = parent}(range(s), [](long long, auto const& element) {
+            return div{}(std::string{element});
+        }));
+        ASSERT_EQ(parent["children"]["length"].as<long long>(), 3);
+
+        s.insert('D');
+        globalEventContext.executeActiveEventsImmediately();
+        EXPECT_EQ(parent["children"]["length"].as<long long>(), 4);
+    }
+
+    TEST_F(TestRanges, MultiSubscriber_SetInsertReplacesNotAppends)
+    {
+        Nui::val parent1;
+        Nui::val parent2;
+        Observed<std::set<char>> s{{'A', 'B', 'C'}};
+
+        using Nui::Elements::div;
+        using Nui::Elements::body;
+        using namespace Nui::Attributes;
+
+        auto renderer = [](long long, auto const& element) -> Nui::ElementRenderer {
+            return div{}(std::string{element});
+        };
+        render(body{}(
+            div{reference = parent1}(range(s), renderer),
+            div{reference = parent2}(range(s), renderer)));
+
+        ASSERT_EQ(parent1["children"]["length"].as<long long>(), 3);
+        ASSERT_EQ(parent2["children"]["length"].as<long long>(), 3);
+
+        s.insert('D');
+        globalEventContext.executeActiveEventsImmediately();
+        EXPECT_EQ(parent1["children"]["length"].as<long long>(), 4);
+        EXPECT_EQ(parent2["children"]["length"].as<long long>(), 4);
+    }
+
+    TEST_F(TestRanges, MultiSubscriber_AfterPriorBodyReplace_SetInsert)
+    {
+        // Reproduces the failure-in-context: a prior render+mutation cycle
+        // before the set scope causes the set's insert to double-render its
+        // parents. Standalone the test passes; this minimizes the
+        // surrounding state to identify what leaks.
+        using Nui::Elements::div;
+        using Nui::Elements::body;
+        using namespace Nui::Attributes;
+
+        {
+            Nui::val deqp1;
+            Nui::val deqp2;
+            Observed<std::deque<char>> deq{{'A', 'B'}};
+            auto renderer = [](long long, auto const& element) -> Nui::ElementRenderer {
+                return div{}(std::string{element});
+            };
+            render(body{}(
+                div{reference = deqp1}(range(deq), renderer),
+                div{reference = deqp2}(range(deq), renderer)));
+            deq.push_back('C');
+            globalEventContext.executeActiveEventsImmediately();
+        }
+
+        Nui::val parent1;
+        Nui::val parent2;
+        Observed<std::set<char>> s{{'A', 'B', 'C'}};
+        auto renderer = [](long long, auto const& element) -> Nui::ElementRenderer {
+            return div{}(std::string{element});
+        };
+        render(body{}(
+            div{reference = parent1}(range(s), renderer),
+            div{reference = parent2}(range(s), renderer)));
+
+        ASSERT_EQ(parent1["children"]["length"].as<long long>(), 3);
+        ASSERT_EQ(parent2["children"]["length"].as<long long>(), 3);
+
+        s.insert('D');
+        globalEventContext.executeActiveEventsImmediately();
+        EXPECT_EQ(parent1["children"]["length"].as<long long>(), 4);
+        EXPECT_EQ(parent2["children"]["length"].as<long long>(), 4);
+    }
+
+    TEST_F(TestRanges, RepeatedIndexedAssignAtSamePosition)
+    {
+        // Regression: repeated Replace ops at the same position used to leave
+        // the parent's mock children array referencing the very first
+        // replacement, because replaceElementImpl reassigns element_ to the
+        // new replacement after replaceWith and the mock's replaceWith only
+        // redirected the original handle.
+        Nui::val parent;
+        Observed<std::vector<int>> vec{{0, 0, 0}};
+
+        using Nui::Elements::div;
+        using Nui::Elements::body;
+        using namespace Nui::Attributes;
+
+        render(body{reference = parent}(range(vec), [](long long, auto const& element) {
+            return div{}(std::to_string(element));
+        }));
+        EXPECT_EQ(parent["children"][1]["textContent"].as<std::string>(), std::string{"0"});
+
+        vec[1] = 100;
+        globalEventContext.executeActiveEventsImmediately();
+        EXPECT_EQ(parent["children"][1]["textContent"].as<std::string>(), std::string{"100"});
+
+        vec[1] = 200;
+        globalEventContext.executeActiveEventsImmediately();
+        EXPECT_EQ(parent["children"][1]["textContent"].as<std::string>(), std::string{"200"});
+
+        vec[1] = 300;
+        globalEventContext.executeActiveEventsImmediately();
+        EXPECT_EQ(parent["children"][1]["textContent"].as<std::string>(), std::string{"300"});
+    }
+
+    // ---------------------------------------------------------------------
+    // Subscriber lifecycle and stress tests
+    // ---------------------------------------------------------------------
+
+    TEST_F(TestRanges, SubscriberLifetime_Detach)
+    {
+        Nui::val parent1;
+        Nui::val parent2;
+
+        Observed<bool> showSecond{false};
+        Observed<std::vector<char>> vec{{'A', 'B', 'C', 'D'}};
+
+        using Nui::Elements::div;
+        using Nui::Elements::body;
+        using namespace Nui::Attributes;
+
+        auto renderer = [](long long, auto const& element) -> Nui::ElementRenderer {
+            return div{}(std::string{element});
+        };
+
+        // clang-format off
+        render(
+            body{}(
+                div{reference = parent1}(range(vec), renderer),
+                div{}(
+                    observe(showSecond),
+                    [&parent2, &vec, &renderer, &showSecond]() -> Nui::ElementRenderer {
+                        if (!showSecond.value())
+                            return Nui::nil();
+                        return div{reference = parent2}(range(vec), renderer);
+                    }
+                )
+            )
+        );
+        // clang-format on
+
+        EXPECT_EQ(vec.readerContextCount(), 1u);
+
+        showSecond = true;
+        globalEventContext.executeActiveEventsImmediately();
+        EXPECT_EQ(vec.readerContextCount(), 2u);
+        textBodyParityTest(vec, parent1);
+        textBodyParityTest(vec, parent2);
+
+        showSecond = false;
+        globalEventContext.executeActiveEventsImmediately();
+
+        // First mutation tears down the dead subscriber's renderer (its event
+        // returns false from its action), but at this point its own
+        // forEachReaderContext iteration already saw the weak_ptr alive.
+        vec.push_back('E');
+        globalEventContext.executeActiveEventsImmediately();
+        // Second mutation prunes the now-expired weak_ptr.
+        vec.push_back('F');
+        globalEventContext.executeActiveEventsImmediately();
+
+        EXPECT_EQ(vec.readerContextCount(), 1u);
+        textBodyParityTest(vec, parent1);
+    }
+
+    TEST_F(TestRanges, SubscriberLifetime_DiesMidBroadcast)
+    {
+        Nui::val parent1;
+        Nui::val parent2;
+
+        Observed<bool> showSecond{true};
+        Observed<std::vector<char>> vec{{'A', 'B', 'C', 'D'}};
+
+        using Nui::Elements::div;
+        using Nui::Elements::body;
+        using namespace Nui::Attributes;
+
+        auto renderer = [](long long, auto const& element) -> Nui::ElementRenderer {
+            return div{}(std::string{element});
+        };
+
+        // clang-format off
+        render(
+            body{}(
+                div{reference = parent1}(range(vec), renderer),
+                div{}(
+                    observe(showSecond),
+                    [&parent2, &vec, &renderer, &showSecond]() -> Nui::ElementRenderer {
+                        if (!showSecond.value())
+                            return Nui::nil();
+                        return div{reference = parent2}(range(vec), renderer);
+                    }
+                )
+            )
+        );
+        // clang-format on
+
+        EXPECT_EQ(vec.readerContextCount(), 2u);
+
+        // Kill the second subscriber and immediately mutate. The broadcast must
+        // tolerate an expired weak_ptr without crashing and the survivor must
+        // stay in sync.
+        showSecond = false;
+        vec.push_back('E');
+        vec.push_back('F');
+        globalEventContext.executeActiveEventsImmediately();
+
+        textBodyParityTest(vec, parent1);
+
+        vec.erase(vec.begin());
+        vec.insert(vec.begin() + 1, 'Z');
+        globalEventContext.executeActiveEventsImmediately();
+
+        textBodyParityTest(vec, parent1);
+        EXPECT_EQ(vec.readerContextCount(), 1u);
+    }
+
+    TEST_F(TestRanges, FiveSubscribers_RandomMutations)
+    {
+        std::array<Nui::val, 5> parents;
+        Observed<std::vector<int>> vec{{0, 1, 2, 3, 4, 5, 6, 7}};
+
+        using Nui::Elements::div;
+        using Nui::Elements::body;
+        using namespace Nui::Attributes;
+
+        auto renderer = [](long long, auto const& element) -> Nui::ElementRenderer {
+            return div{}(std::to_string(element));
+        };
+
+        // clang-format off
+        render(body{}(
+            div{reference = parents[0]}(range(vec), renderer),
+            div{reference = parents[1]}(range(vec), renderer),
+            div{reference = parents[2]}(range(vec), renderer),
+            div{reference = parents[3]}(range(vec), renderer),
+            div{reference = parents[4]}(range(vec), renderer)
+        ));
+        // clang-format on
+
+        EXPECT_EQ(vec.readerContextCount(), 5u);
+
+        // Cycle through the supported single-type ops in batches, flushing
+        // between each. This stresses the broadcast loop with five readers
+        // without crossing into the parked PerformAndRetry-with-mixed-types
+        // territory (DISABLED_*).
+        std::mt19937 rng{0xC0FFEEu};
+        const auto runBatch = [&](int op, int count) {
+            for (int n = 0; n != count; ++n)
+            {
+                const auto size = vec.size();
+                switch (op)
+                {
+                    case 0: // push_back
+                        vec.push_back(n);
+                        break;
+                    case 1: // pop_back
+                        if (size > 0u)
+                            vec.pop_back();
+                        break;
+                    case 2: // insert
+                    {
+                        std::uniform_int_distribution<std::size_t> posDist{0u, size};
+                        const auto pos = posDist(rng);
+                        vec.insert(vec.begin() + static_cast<std::ptrdiff_t>(pos), -n);
+                        break;
+                    }
+                    case 3: // erase
+                        if (size > 0u)
+                        {
+                            std::uniform_int_distribution<std::size_t> posDist{0u, size - 1u};
+                            const auto pos = posDist(rng);
+                            vec.erase(vec.begin() + static_cast<std::ptrdiff_t>(pos));
+                        }
+                        break;
+                    case 4: // indexed assign
+                        if (size > 0u)
+                        {
+                            std::uniform_int_distribution<std::size_t> posDist{0u, size - 1u};
+                            const auto pos = posDist(rng);
+                            vec[pos] = 1000 + n;
+                        }
+                        break;
+                }
+                globalEventContext.executeActiveEventsImmediately();
+            }
+            std::string source;
+            for (auto v : vec.value())
+                source += std::to_string(v) + ",";
+            for (std::size_t pIdx = 0; pIdx != parents.size(); ++pIdx)
+            {
+                auto const& parent = parents[pIdx];
+                ASSERT_EQ(parent["children"]["length"].as<long long>(), static_cast<long long>(vec.size()))
+                    << "parent[" << pIdx << "] op " << op;
+                std::string viewReality;
+                for (long long i = 0, end = parent["children"]["length"].as<long long>(); i != end; ++i)
+                    viewReality += parent["children"][i]["textContent"].as<std::string>() + ",";
+                ASSERT_EQ(source, viewReality) << "parent[" << pIdx << "] op " << op;
+            }
+        };
+
+        runBatch(0, 20); // push_back x 20
+        runBatch(4, 20); // indexed assign x 20
+        runBatch(2, 20); // insert x 20
+        runBatch(3, 20); // erase x 20
+        runBatch(1, 5); // pop_back x 5
+        runBatch(4, 20); // indexed assign x 20 (post-mutation)
+
+        EXPECT_EQ(vec.readerContextCount(), 5u);
+    }
+
+    TEST_F(TestRanges, InteractionAcrossSubscribers)
+    {
+        // Subscribers attached at different points in time must all converge
+        // to the same view of the container after later mutations.
+        Nui::val parentEarly;
+        Nui::val parentLate;
+
+        Observed<bool> mountLate{false};
+        Observed<std::vector<char>> vec{{'A', 'B', 'C'}};
+
+        using Nui::Elements::div;
+        using Nui::Elements::body;
+        using namespace Nui::Attributes;
+
+        auto renderer = [](long long, auto const& element) -> Nui::ElementRenderer {
+            return div{}(std::string{element});
+        };
+
+        // clang-format off
+        render(
+            body{}(
+                div{reference = parentEarly}(range(vec), renderer),
+                div{}(
+                    observe(mountLate),
+                    [&parentLate, &vec, &renderer, &mountLate]() -> Nui::ElementRenderer {
+                        if (!mountLate.value())
+                            return Nui::nil();
+                        return div{reference = parentLate}(range(vec), renderer);
+                    }
+                )
+            )
+        );
+        // clang-format on
+
+        // First mutate while only the early subscriber is mounted.
+        vec.push_back('D');
+        vec.push_back('E');
+        globalEventContext.executeActiveEventsImmediately();
+        textBodyParityTest(vec, parentEarly);
+
+        // Mount the late subscriber. It should render the current state.
+        mountLate = true;
+        globalEventContext.executeActiveEventsImmediately();
+        textBodyParityTest(vec, parentEarly);
+        textBodyParityTest(vec, parentLate);
+        EXPECT_EQ(vec.readerContextCount(), 2u);
+
+        // Now mutate again. Both subscribers must agree.
+        vec.erase(vec.begin() + 1);
+        globalEventContext.executeActiveEventsImmediately();
+        vec.insert(vec.begin(), 'Z');
+        globalEventContext.executeActiveEventsImmediately();
+        vec[0] = 'Q';
+        globalEventContext.executeActiveEventsImmediately();
+
+        textBodyParityTest(vec, parentEarly);
+        textBodyParityTest(vec, parentLate);
+    }
+
+    TEST_F(TestRanges, OperatorAssignBetweenContainers)
+    {
+        Nui::val parentA1;
+        Nui::val parentA2;
+
+        Observed<std::vector<char>> a{{'A', 'B', 'C'}};
+        Observed<std::vector<char>> b{{'X', 'Y', 'Z', 'W'}};
+
+        using Nui::Elements::div;
+        using Nui::Elements::body;
+        using namespace Nui::Attributes;
+
+        auto renderer = [](long long, auto const& element) -> Nui::ElementRenderer {
+            return div{}(std::string{element});
+        };
+
+        render(body{}(
+            div{reference = parentA1}(range(a), renderer), div{reference = parentA2}(range(a), renderer)));
+
+        EXPECT_EQ(a.readerContextCount(), 2u);
+        EXPECT_EQ(b.readerContextCount(), 0u);
+
+        a = std::move(b.value());
+        globalEventContext.executeActiveEventsImmediately();
+
+        textBodyParityTest(a, parentA1);
+        textBodyParityTest(a, parentA2);
+
+        // b is unrendered; mutating it must not affect a's subscribers.
+        b = std::vector<char>{'1', '2'};
+        globalEventContext.executeActiveEventsImmediately();
+        textBodyParityTest(a, parentA1);
+        textBodyParityTest(a, parentA2);
+    }
+
+    TEST_F(TestRanges, Map_Set_Deque_MultiSubscriber)
+    {
+        using Nui::Elements::div;
+        using Nui::Elements::body;
+        using namespace Nui::Attributes;
+
+        // deque
+        {
+            Nui::val parent1;
+            Nui::val parent2;
+            Observed<std::deque<char>> deq{{'A', 'B', 'C', 'D'}};
+            auto renderer = [](long long, auto const& element) -> Nui::ElementRenderer {
+                return div{}(std::string{element});
+            };
+            render(body{}(
+                div{reference = parent1}(range(deq), renderer), div{reference = parent2}(range(deq), renderer)));
+
+            deq.push_front('Z');
+            globalEventContext.executeActiveEventsImmediately();
+            textBodyParityTest(deq, parent1);
+            textBodyParityTest(deq, parent2);
+
+            deq.push_back('E');
+            globalEventContext.executeActiveEventsImmediately();
+            textBodyParityTest(deq, parent1);
+            textBodyParityTest(deq, parent2);
+
+            EXPECT_EQ(deq.readerContextCount(), 2u);
+        }
+
+        // set
+        {
+            Nui::val parent1;
+            Nui::val parent2;
+            Observed<std::set<char>> s{{'A', 'B', 'C'}};
+            auto renderer = [](long long, auto const& element) -> Nui::ElementRenderer {
+                return div{}(std::string{element});
+            };
+            render(body{}(
+                div{reference = parent1}(range(s), renderer), div{reference = parent2}(range(s), renderer)));
+
+            EXPECT_EQ(parent1["children"]["length"].as<long long>(), static_cast<long long>(s.size()));
+            EXPECT_EQ(parent2["children"]["length"].as<long long>(), static_cast<long long>(s.size()));
+
+            s.insert('D');
+            globalEventContext.executeActiveEventsImmediately();
+            EXPECT_EQ(parent1["children"]["length"].as<long long>(), static_cast<long long>(s.size()));
+            EXPECT_EQ(parent2["children"]["length"].as<long long>(), static_cast<long long>(s.size()));
+
+            s.insert('Z');
+            globalEventContext.executeActiveEventsImmediately();
+            EXPECT_EQ(parent1["children"]["length"].as<long long>(), static_cast<long long>(s.size()));
+            EXPECT_EQ(parent2["children"]["length"].as<long long>(), static_cast<long long>(s.size()));
+
+            EXPECT_EQ(s.readerContextCount(), 2u);
+        }
+
+        // map: routed through UnoptimizedRangeRenderer rather than the
+        // per-subscriber-context path. Verify both subscribers render the
+        // initial state.
+        {
+            Nui::val parent1;
+            Nui::val parent2;
+            Observed<std::map<int, char>> m{{{1, 'A'}, {2, 'B'}, {3, 'C'}}};
+            auto renderer = [](long long, auto const& element) -> Nui::ElementRenderer {
+                return div{}(std::to_string(element.first) + ":" + std::string{element.second});
+            };
+            render(body{}(
+                div{reference = parent1}(range(m), renderer), div{reference = parent2}(range(m), renderer)));
+
+            EXPECT_EQ(parent1["children"]["length"].as<long long>(), static_cast<long long>(m->size()));
+            EXPECT_EQ(parent2["children"]["length"].as<long long>(), static_cast<long long>(m->size()));
+        }
+    }
+
+    TEST_F(TestRanges, MoveAssignedObservedHasNoSubscribers)
+    {
+        // A freshly-constructed Observed has no subscribers until rendered.
+        Observed<std::vector<char>> fresh{{'A', 'B'}};
+        EXPECT_EQ(fresh.readerContextCount(), 0u);
+
+        // After replacing the value via operator=(T&&) but without any range()
+        // having been bound, there must still be no subscribers.
+        fresh = std::vector<char>{'X', 'Y', 'Z'};
+        globalEventContext.executeActiveEventsImmediately();
+        EXPECT_EQ(fresh.readerContextCount(), 0u);
+
+        // .assign() likewise must not create subscribers.
+        fresh.assign({'P', 'Q', 'R', 'S'});
+        globalEventContext.executeActiveEventsImmediately();
+        EXPECT_EQ(fresh.readerContextCount(), 0u);
     }
 
     TEST_F(TestRanges, CanRenderRangeEvenDuringPendingModification)
