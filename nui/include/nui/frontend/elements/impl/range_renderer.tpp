@@ -106,11 +106,22 @@ namespace Nui::Detail
         virtual bool updateChildren(bool initial) = 0;
 
       protected:
+        RangeEventContext& ownContext()
+        {
+            return *ownContext_;
+        }
+        std::shared_ptr<RangeEventContext> const& ownContextPtr() const
+        {
+            return ownContext_;
+        }
+
+      protected:
         GeneratorT elementRenderer_;
         std::weak_ptr<Nui::Dom::Element> weakMaterialized_;
         RendererVector before_;
         RendererVector after_;
         std::size_t renderedBeforeCount_{0};
+        std::shared_ptr<RangeEventContext> ownContext_{std::make_shared<RangeEventContext>()};
 
       private:
         ObservedAddMutableReference_t<ObservedType> valueRange_;
@@ -232,6 +243,7 @@ namespace Nui::Detail
             auto* valueRange = getValueRange(valueRangeHolder);
             if (valueRange)
             {
+                valueRange->attachReaderContext(this->ownContextPtr());
                 valueRange->attachEvent(
                     Nui::globalEventContext.registerEvent(
                         Event{
@@ -276,6 +288,7 @@ namespace Nui::Detail
             auto* valueRange = getValueRange(valueRangeHolder);
             if (valueRange)
             {
+                valueRange->attachReaderContext(this->ownContextPtr());
                 valueRange->attachEvent(
                     Nui::globalEventContext.registerEvent(
                         Event{
