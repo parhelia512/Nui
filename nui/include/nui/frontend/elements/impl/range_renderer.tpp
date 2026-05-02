@@ -84,7 +84,7 @@ namespace Nui::Detail
             if (valueRange == nullptr)
                 return false;
 
-            if (valueRange->rangeContext().isFullRangeUpdate() || force)
+            if (ownContext().isFullRangeUpdate() || force)
             {
                 parent->clearChildren();
                 if (!before_.empty())
@@ -94,7 +94,7 @@ namespace Nui::Detail
                 long long counter = 0;
                 for (auto& element : valueRange->value())
                     elementRenderer_(counter++, element)(*parent, Renderer{.type = RendererType::Append});
-                valueRange->rangeContext().reset();
+                ownContext().reset();
 
                 if (!after_.empty())
                     parent->appendElements(after_);
@@ -138,6 +138,7 @@ namespace Nui::Detail
         using BasicObservedRenderer<RangeT, GeneratorT>::elementRenderer_;
         using BasicObservedRenderer<RangeT, GeneratorT>::fullRangeUpdate;
         using BasicObservedRenderer<RangeT, GeneratorT>::getValueRange;
+        using BasicObservedRenderer<RangeT, GeneratorT>::ownContext;
         using BasicObservedRenderer<RangeT, GeneratorT>::before_;
         using BasicObservedRenderer<RangeT, GeneratorT>::after_;
         using BasicObservedRenderer<RangeT, GeneratorT>::renderedBeforeCount_;
@@ -149,7 +150,7 @@ namespace Nui::Detail
             if (valueRange == nullptr)
                 return;
 
-            for (auto i = valueRange->rangeContext().begin(), end = valueRange->rangeContext().end(); i != end; ++i)
+            for (auto i = ownContext().begin(), end = ownContext().end(); i != end; ++i)
             {
                 for (auto r = i->low(), high = i->high(); r <= high; ++r)
                 {
@@ -169,7 +170,7 @@ namespace Nui::Detail
             if (valueRange == nullptr)
                 return;
 
-            for (auto const& range : valueRange->rangeContext())
+            for (auto const& range : ownContext())
             {
                 using RangeValueType = typename std::decay_t<decltype(range)>::value_type;
                 const auto clampedLow = std::max(range.low(), RangeValueType{0});
@@ -193,7 +194,7 @@ namespace Nui::Detail
             if (valueRange == nullptr)
                 return;
 
-            for (auto const& eraseRange : reverse_view{valueRange->rangeContext()})
+            for (auto const& eraseRange : reverse_view{ownContext()})
             {
                 parent->erase(
                     begin(*parent) + eraseRange.low() + renderedBeforeCount_,
@@ -217,7 +218,7 @@ namespace Nui::Detail
             if (fullRangeUpdate(parent, initial))
                 return KeepRange;
 
-            switch (valueRange->rangeContext().operationType())
+            switch (ownContext().operationType())
             {
                 case RangeOperationType::Insert:
                     insertions(parent);
