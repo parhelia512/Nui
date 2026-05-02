@@ -1175,6 +1175,11 @@ namespace Nui
             readerContexts_->emplace_back(ctx);
         }
 
+        std::size_t readerContextCount() const
+        {
+            return readerContexts_->size();
+        }
+
       protected:
         void update(bool force = false) const override
         {
