@@ -285,6 +285,10 @@ namespace Nui
         {
             return fullRangeUpdate_;
         }
+        void setDisableOptimizations(bool disable) noexcept
+        {
+            disableOptimizations_ = disable;
+        }
         auto begin() const
         {
             return trackedRanges_.begin();

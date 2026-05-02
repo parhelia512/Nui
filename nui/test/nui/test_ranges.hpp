@@ -1934,30 +1934,6 @@ namespace Nui::Tests
         EXPECT_EQ(this->aggregateObservedCharList(vec), this->getChildrenBodyTextConcat(parent2));
     }
 
-    TEST_F(TestRanges, RangeContextIsResetAfterAllChildrenAreRendered)
-    {
-        Nui::val parent1;
-        Nui::val parent2;
-
-        Observed<std::vector<char>> vec{{'A', 'B', 'C', 'D'}};
-
-        using Nui::Elements::div;
-        using Nui::Elements::body;
-        using namespace Nui::Attributes;
-
-        auto renderer = [&vec](long long i, auto const& element) -> Nui::ElementRenderer {
-            return div{}(std::string{element});
-        };
-
-        render(body{}(div{reference = parent1}(range(vec), renderer), div{reference = parent2}(range(vec), renderer)));
-
-        vec.push_back('E');
-        vec[0] = 'X';
-        globalEventContext.executeActiveEventsImmediately();
-
-        EXPECT_TRUE(vec.rangeContext().isInDefaultState());
-    }
-
     // ---------------------------------------------------------------------
     // Multi-subscriber tests for the fullRangeUpdate path
     // ---------------------------------------------------------------------

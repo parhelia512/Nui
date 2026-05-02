@@ -744,47 +744,21 @@ namespace Nui
       public:
         explicit ObservedContainer(CustomEventContextFlag_t, EventContext& ctx)
             : ModifiableObserved<ContainerT, Tags>{CustomEventContextFlag, ctx}
-            , rangeContext_{std::make_shared<RangeEventContext>()}
             , afterEffectId_{registerAfterEffect()}
         {}
         explicit ObservedContainer()
             : ModifiableObserved<ContainerT, Tags>{}
-            , rangeContext_{std::make_shared<RangeEventContext>()}
             , afterEffectId_{registerAfterEffect()}
         {}
         template <typename T = ContainerT>
         explicit ObservedContainer(CustomEventContextFlag_t, EventContext& ctx, T&& t)
             : ModifiableObserved<ContainerT, Tags>{CustomEventContextFlag, ctx, std::forward<T>(t)}
-            , rangeContext_{std::make_shared<RangeEventContext>()}
             , afterEffectId_{registerAfterEffect()}
         {}
         template <typename T = ContainerT>
         requires std::constructible_from<ContainerT, T>
         explicit ObservedContainer(T&& t)
             : ModifiableObserved<ContainerT, Tags>{std::forward<T>(t)}
-            , rangeContext_{std::make_shared<RangeEventContext>()}
-            , afterEffectId_{registerAfterEffect()}
-        {}
-        explicit ObservedContainer(RangeEventContext&& rangeContext)
-            : ModifiableObserved<ContainerT, Tags>{}
-            , rangeContext_{std::make_shared<RangeEventContext>(std::move(rangeContext))}
-            , afterEffectId_{registerAfterEffect()}
-        {}
-        explicit ObservedContainer(CustomEventContextFlag_t, EventContext& ctx, RangeEventContext&& rangeContext)
-            : ModifiableObserved<ContainerT, Tags>{CustomEventContextFlag, ctx}
-            , rangeContext_{std::make_shared<RangeEventContext>(std::move(rangeContext))}
-            , afterEffectId_{registerAfterEffect()}
-        {}
-        template <typename T = ContainerT>
-        ObservedContainer(T&& t, RangeEventContext&& rangeContext)
-            : ModifiableObserved<ContainerT, Tags>{std::forward<T>(t)}
-            , rangeContext_{std::make_shared<RangeEventContext>(std::move(rangeContext))}
-            , afterEffectId_{registerAfterEffect()}
-        {}
-        template <typename T = ContainerT>
-        ObservedContainer(CustomEventContextFlag_t, EventContext& ctx, T&& t, RangeEventContext&& rangeContext)
-            : ModifiableObserved<ContainerT, Tags>{CustomEventContextFlag, ctx, std::forward<T>(t)}
-            , rangeContext_{std::make_shared<RangeEventContext>(std::move(rangeContext))}
             , afterEffectId_{registerAfterEffect()}
         {}
 
@@ -805,7 +779,6 @@ namespace Nui
         ObservedContainer& operator=(T&& t)
         {
             contained_ = std::forward<T>(t);
-            rangeContext_->reset(true);
             forEachReaderContext([](RangeEventContext& c) { c.reset(true); });
             update();
             return *this;
@@ -813,7 +786,6 @@ namespace Nui
         void assign(size_type count, const value_type& value)
         {
             contained_.assign(count, value);
-            rangeContext_->reset(true);
             forEachReaderContext([](RangeEventContext& c) { c.reset(true); });
             update();
         }
@@ -821,14 +793,12 @@ namespace Nui
         void assign(Iterator first, Iterator last)
         {
             contained_.assign(first, last);
-            rangeContext_->reset(true);
             forEachReaderContext([](RangeEventContext& c) { c.reset(true); });
             update();
         }
         void assign(std::initializer_list<value_type> ilist)
         {
             contained_.assign(ilist);
-            rangeContext_->reset(true);
             forEachReaderContext([](RangeEventContext& c) { c.reset(true); });
             update();
         }
@@ -960,7 +930,6 @@ namespace Nui
         void clear()
         {
             contained_.clear();
-            rangeContext_->reset(true);
             forEachReaderContext([](RangeEventContext& c) { c.reset(true); });
             update();
         }
@@ -973,7 +942,6 @@ namespace Nui
             NUI_ASSERT(ObservedBase::eventContext_ != nullptr, "Event context must never be null.");
 
             const auto result = contained_.insert(value);
-            rangeContext_->performFullRangeUpdate();
             forEachReaderContext([](RangeEventContext& c) { c.performFullRangeUpdate(); });
             update();
             ObservedBase::eventContext_->executeActiveEventsImmediately();
@@ -988,7 +956,6 @@ namespace Nui
             NUI_ASSERT(ObservedBase::eventContext_ != nullptr, "Event context must never be null.");
 
             const auto result = contained_.insert(std::move(value));
-            rangeContext_->performFullRangeUpdate();
             forEachReaderContext([](RangeEventContext& c) { c.performFullRangeUpdate(); });
             update();
             ObservedBase::eventContext_->executeActiveEventsImmediately();
@@ -1190,7 +1157,6 @@ namespace Nui
         void swap(ContainerT& other)
         {
             contained_.swap(other);
-            rangeContext_->reset(true);
             forEachReaderContext([](RangeEventContext& c) { c.reset(true); });
             update();
         }
@@ -1204,14 +1170,6 @@ namespace Nui
         {
             return contained_;
         }
-        RangeEventContext& rangeContext()
-        {
-            return *rangeContext_;
-        }
-        RangeEventContext const& rangeContext() const
-        {
-            return *rangeContext_;
-        }
         void attachReaderContext(std::shared_ptr<RangeEventContext> const& ctx) const
         {
             readerContexts_->emplace_back(ctx);
@@ -1221,10 +1179,7 @@ namespace Nui
         void update(bool force = false) const override
         {
             if (force)
-            {
-                rangeContext_->reset(true);
                 forEachReaderContext([](RangeEventContext& c) { c.reset(true); });
-            }
             ObservedBase::eventContext_->activateAfterEffect(afterEffectId_);
             ObservedBase::update(force);
         }
@@ -1255,14 +1210,25 @@ namespace Nui
             doInsert = [&](int retries) {
                 NUI_ASSERT(ObservedBase::eventContext_ != nullptr, "Event context must never be null.");
 
-                const auto result = rangeContext_->insertModificationRange(low, high, type);
-                forEachReaderContext([&](RangeEventContext& c) { c.insertModificationRange(low, high, type); });
-                if (result == RangeEventContext::InsertResult::Perform)
+                bool needsRetry = false;
+                bool needsFlush = false;
+                bool rejected = false;
+                forEachReaderContext([&](RangeEventContext& c) {
+                    auto const r = c.insertModificationRange(low, high, type);
+                    if (r == RangeEventContext::InsertResult::Perform)
+                        needsFlush = true;
+                    else if (r == RangeEventContext::InsertResult::PerformAndRetry)
+                        needsRetry = true;
+                    else if (r == RangeEventContext::InsertResult::Rejected)
+                        rejected = true;
+                });
+
+                if (needsFlush && !needsRetry)
                 {
                     update();
                     ObservedBase::eventContext_->executeActiveEventsImmediately();
                 }
-                else if (result == RangeEventContext::InsertResult::PerformAndRetry)
+                else if (needsRetry)
                 {
                     update();
                     ObservedBase::eventContext_->executeActiveEventsImmediately();
@@ -1271,25 +1237,23 @@ namespace Nui
                         doInsert(retries + 1);
                     else
                     {
-                        rangeContext_->reset(true);
                         forEachReaderContext([](RangeEventContext& c) { c.reset(true); });
                         update();
                         ObservedBase::eventContext_->executeActiveEventsImmediately();
                         return;
                     }
                 }
-                else if (result == RangeEventContext::InsertResult::Accepted)
+                else if (rejected)
                 {
-                    update();
-                }
-                else
-                {
-                    // Rejected! (why?)
-                    rangeContext_->reset(true);
                     forEachReaderContext([](RangeEventContext& c) { c.reset(true); });
                     update();
                     ObservedBase::eventContext_->executeActiveEventsImmediately();
                     return;
+                }
+                else
+                {
+                    // all Accepted (or no readers)
+                    update();
                 }
             };
 
@@ -1300,20 +1264,15 @@ namespace Nui
         {
             NUI_ASSERT(ObservedBase::eventContext_ != nullptr, "Event context must never be null.");
             return ObservedBase::eventContext_->registerAfterEffect(
-                Event{[weak = std::weak_ptr<RangeEventContext>{rangeContext_},
-                       weakReaders = std::weak_ptr<std::vector<std::weak_ptr<RangeEventContext>>>{
-                           readerContexts_}](EventContext::EventIdType) {
-                    auto shared = weak.lock();
-                    if (!shared)
+                Event{[weakReaders = std::weak_ptr<std::vector<std::weak_ptr<RangeEventContext>>>{
+                          readerContexts_}](EventContext::EventIdType) {
+                    auto sharedReaders = weakReaders.lock();
+                    if (!sharedReaders)
                         return false;
-                    shared->reset();
-                    if (auto sharedReaders = weakReaders.lock())
+                    for (auto& w : *sharedReaders)
                     {
-                        for (auto& w : *sharedReaders)
-                        {
-                            if (auto r = w.lock())
-                                r->reset();
-                        }
+                        if (auto r = w.lock())
+                            r->reset();
                     }
                     return true;
                 }});
@@ -1321,9 +1280,12 @@ namespace Nui
 
         void eraseNotify(std::size_t index, std::size_t high)
         {
-            const bool fixupPerformed = rangeContext_->eraseNotify(index, high);
-            forEachReaderContext([&](RangeEventContext& c) { c.eraseNotify(index, high); });
-            if (fixupPerformed) // FORCE update:
+            bool anyFixup = false;
+            forEachReaderContext([&](RangeEventContext& c) {
+                if (c.eraseNotify(index, high))
+                    anyFixup = true;
+            });
+            if (anyFixup) // FORCE update:
             {
                 update();
                 ObservedBase::eventContext_->executeActiveEventsImmediately();
@@ -1332,7 +1294,6 @@ namespace Nui
 
       protected:
         MoveDetector moveDetector_;
-        mutable std::shared_ptr<RangeEventContext> rangeContext_;
         mutable std::shared_ptr<std::vector<std::weak_ptr<RangeEventContext>>> readerContexts_{
             std::make_shared<std::vector<std::weak_ptr<RangeEventContext>>>()};
         mutable EventContext::EventIdType afterEffectId_;
@@ -1445,15 +1406,11 @@ namespace Nui
         using ObservedContainer<std::set<Parameters...>, Tags>::operator->;
         using observed_type = std::set<Parameters...>;
 
-      public:
-        Observed()
-            : ObservedContainer<std::set<Parameters...>, Tags>{RangeEventContext{true}}
-        {}
-        template <typename T = std::set<Parameters...>>
-        requires std::constructible_from<std::set<Parameters...>, T>
-        explicit Observed(T&& t)
-            : ObservedContainer<std::set<Parameters...>, Tags>{std::forward<T>(t), RangeEventContext{true}}
-        {}
+        void attachReaderContext(std::shared_ptr<RangeEventContext> const& ctx) const
+        {
+            ObservedContainer<std::set<Parameters...>, Tags>::attachReaderContext(ctx);
+            ctx->setDisableOptimizations(true);
+        }
 
         Observed<std::set<Parameters...>, Tags>& operator=(std::set<Parameters...> const& contained)
         {
@@ -1476,15 +1433,11 @@ namespace Nui
         using ObservedContainer<std::list<Parameters...>, Tags>::operator->;
         using observed_type = std::list<Parameters...>;
 
-      public:
-        Observed()
-            : ObservedContainer<std::list<Parameters...>, Tags>{RangeEventContext{true}}
-        {}
-        template <typename T = std::list<Parameters...>>
-        requires std::constructible_from<std::list<Parameters...>, T>
-        explicit Observed(T&& t)
-            : ObservedContainer<std::list<Parameters...>, Tags>{std::forward<T>(t), RangeEventContext{true}}
-        {}
+        void attachReaderContext(std::shared_ptr<RangeEventContext> const& ctx) const
+        {
+            ObservedContainer<std::list<Parameters...>, Tags>::attachReaderContext(ctx);
+            ctx->setDisableOptimizations(true);
+        }
 
         Observed<std::list<Parameters...>, Tags>& operator=(std::list<Parameters...> const& contained)
         {
